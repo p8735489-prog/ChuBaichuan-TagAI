@@ -1,0 +1,8 @@
+[user]
+	name = p8735489-prog
+	email = p8735489@gmail.com
+[core]
+	pager = cat
+[safe]
+	directory = /storage/emulated/0/ChuBaichuan-TagAI
+	directory = /storage/emulated/0/Download/ChuBaichuan-TagAI
