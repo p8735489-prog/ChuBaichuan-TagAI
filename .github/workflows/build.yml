@@ -1,0 +1,57 @@
+name: Build APK
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - "**"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      # Generates real gradlew / gradlew.bat / gradle/wrapper/gradle-wrapper.jar
+      # / gradle-wrapper.properties using the official Gradle distribution
+      # fetched by setup-gradle above. This is the authentic wrapper, not a
+      # hand-written stand-in. DO NOT remove this step — without it, the
+      # gradlew file below does not exist and every later step fails.
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version 8.7 --distribution-type bin
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Build release APK
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p apk-output
+          cp app/build/outputs/apk/release/*.apk apk-output/ChuBaichuan-TagAI.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChuBaichuan-TagAI-apk
+          path: apk-output/*.apk
+          if-no-files-found: error
