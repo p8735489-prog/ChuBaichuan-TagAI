@@ -1,0 +1,85 @@
+name: Build APK
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - "**"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      # Generates real gradlew / gradlew.bat / gradle/wrapper/gradle-wrapper.jar
+      # / gradle-wrapper.properties using the official Gradle distribution
+      # fetched by setup-gradle above. This is the authentic wrapper, not a
+      # hand-written stand-in. DO NOT remove this step — without it, the
+      # gradlew file below does not exist and every later step fails.
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version 8.7 --distribution-type bin
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Build APKs
+        run: ./gradlew assembleDebug assembleRelease --stacktrace
+
+      - name: Collect APKs
+        run: |
+          mkdir -p apk-output
+          cp app/build/outputs/apk/debug/*.apk apk-output/ChuBaichuan-TagAI-debug.apk
+          cp app/build/outputs/apk/release/*.apk apk-output/ChuBaichuan-TagAI-release.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChuBaichuan-TagAI-apk
+          path: apk-output/*.apk
+          if-no-files-found: error
+
+      - name: Prepare version release APK
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          RELEASE_TAG="${GITHUB_REF_NAME}"
+          cp apk-output/ChuBaichuan-TagAI-release.apk "apk-output/ChuBaichuan-TagAI-${RELEASE_TAG}.apk"
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
+          echo "RELEASE_APK=apk-output/ChuBaichuan-TagAI-${RELEASE_TAG}.apk" >> "$GITHUB_ENV"
+
+      - name: Create Release and upload APK
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          body: |
+            正式版 ${{ env.RELEASE_TAG }}
+
+            - 提交：${{ github.sha }}
+            - 运行编号：${{ github.run_number }}
+
+            下载 `${{ env.RELEASE_TAG }}.apk` 即可安装。
+          files: |
+            ${{ env.RELEASE_APK }}
+          fail_on_unmatched_files: true
