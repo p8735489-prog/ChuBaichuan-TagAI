@@ -1,0 +1,94 @@
+name: Build APK
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - "**"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      # Generates real gradlew / gradlew.bat / gradle/wrapper/gradle-wrapper.jar
+      # / gradle-wrapper.properties using the official Gradle distribution
+      # fetched by setup-gradle above. This is the authentic wrapper, not a
+      # hand-written stand-in. DO NOT remove this step — without it, the
+      # gradlew file below does not exist and every later step fails.
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version 8.7 --distribution-type bin
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Build APKs
+        run: ./gradlew assembleDebug assembleRelease --stacktrace
+
+      - name: Collect APKs
+        run: |
+          mkdir -p apk-output
+          cp app/build/outputs/apk/debug/*.apk apk-output/ChuBaichuan-TagAI-debug.apk
+          cp app/build/outputs/apk/release/*.apk apk-output/ChuBaichuan-TagAI-release.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChuBaichuan-TagAI-apk
+          path: apk-output/*.apk
+          if-no-files-found: error
+
+      - name: Extract app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          APP_VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
+          echo "APP_VERSION=${APP_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Prepare version release APK
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          RELEASE_TAG="${GITHUB_REF_NAME}"
+          RELEASE_VERSION="${APP_VERSION:-$RELEASE_TAG}"
+          cp apk-output/ChuBaichuan-TagAI-release.apk "apk-output/ChuBaichuan-TagAI-v${RELEASE_VERSION}.apk"
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${RELEASE_VERSION}" >> "$GITHUB_ENV"
+          echo "RELEASE_APK=apk-output/ChuBaichuan-TagAI-v${RELEASE_VERSION}.apk" >> "$GITHUB_ENV"
+
+      - name: Create Release and upload APK
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ChuBaichuan TagAI v${{ env.RELEASE_VERSION }}
+          body: |
+            正式版 v${{ env.RELEASE_VERSION }}
+
+            - 标签：${{ env.RELEASE_TAG }}
+            - 提交：${{ github.sha }}
+            - 运行编号：${{ github.run_number }}
+
+            下载 `ChuBaichuan-TagAI-v${{ env.RELEASE_VERSION }}.apk` 即可安装。
+          files: |
+            ${{ env.RELEASE_APK }}
+          fail_on_unmatched_files: true
