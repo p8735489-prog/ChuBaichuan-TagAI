@@ -1,0 +1,16 @@
+修复版本 - 2026-07-19
+====================
+确认此文件存在 = 推送的是正确版本
+
+修复内容:
+1. 删除所有 sumOf (改为 fold)
+2. TaggerScreen 内 availableAiModels 改为 aiModels
+3. 新增多模型对比功能
+4. 新增下载放弃按钮
+5. 新增批量识别(最多10张)
+6. 新增标签翻译
+7. 新增4个配色主题
+8. 新增文件管理(按模型分组)
+
+验证: MainActivity.kt 第3394行应为
+  val total: Long = sortedFiles.fold(0L) { acc, f -> acc + f.length() }
