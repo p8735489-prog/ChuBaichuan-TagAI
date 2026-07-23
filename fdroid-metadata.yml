@@ -1,0 +1,44 @@
+Categories:
+  - Multimedia
+  - Graphics
+License: Apache-2.0
+AuthorName: ChuBaichuan
+SourceCode: https://github.com/p8735489-prog/ChuBaichuan-TagAI
+IssueTracker: https://github.com/p8735489-prog/ChuBaichuan-TagAI/issues
+Translation: https://github.com/p8735489-prog/ChuBaichuan-TagAI
+
+AutoName: Local Cue Word
+Summary: 手机本地 AI 反推提示词 · 图片标签识别 · 绘画提示词整理
+Description: |
+  Local Cue Word 是一款完全离线运行的 AI 图片标签识别工具。
+  基于 ONNX 模型在手机本地推理，无需联网，保护隐私。
+  
+  功能特点：
+  - 本地 AI 推理：基于 ONNX Runtime 在手机上运行 WD-Tagger 模型
+  - 自动提示词生成：按画质、主体、外观、场景和动作自动整理标签
+  - 反向词生成：自动生成 Stable Diffusion 负向提示词
+  - 模型推荐：根据检测结果推荐合适的文生图模型
+  - 批量识别：支持多图批量标签识别
+  - 标签翻译：支持中英文标签互译
+  - 多模型支持：可选择不同版本的 AI 模型
+  - 主题自定义：支持多色主题、自定义背景图
+  - 标签收藏与历史记录
+
+RepoType: git
+Repo: https://github.com/p8735489-prog/ChuBaichuan-TagAI.git
+
+Builds:
+  - versionName: '29.5'
+    versionCode: 29050000
+    commit: v29.5
+    subdir: app
+    gradle:
+      - yes
+    prebuild:
+      - sed -i 's/signingConfig = signingConfigs.getByName("fixedRelease")//g' app/build.gradle.kts
+      - sed -i '/signingConfigs/,/^    }/d' app/build.gradle.kts
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: '29.5'
+CurrentVersionCode: 29050000
