@@ -36,6 +36,9 @@ Thumbs.db
 # Secrets
 *.keystore
 !debug.keystore
+# 固定 release 签名 keystore 必须纳入版本控制，否则 CI 构建时
+# :app:validateSigningRelease 会因找不到文件而失败。
+!chubaichuan-fixed-release.keystore
 google-services.json
 
 # Local history
