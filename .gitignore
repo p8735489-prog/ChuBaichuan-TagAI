@@ -1,0 +1,42 @@
+# Built artifacts
+*.apk
+*.aar
+*.ap_
+*.aab
+dex
+out/
+
+# Android Studio
+.idea/
+*.iml
+.gradle/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+cmake-build-*/
+.navigation/
+
+# Gradle
+build/
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+
+# Log files
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+ehthumbs.db
+Icon?
+Thumbs.db
+
+# Secrets
+*.keystore
+!debug.keystore
+google-services.json
+
+# Local history
+.history/

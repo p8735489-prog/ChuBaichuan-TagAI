@@ -1,0 +1,63 @@
+name: Android CI/CD
+
+on:
+  push:
+    tags:
+      - 'v*' # 当推送以 v 开头的标签（如 v1.0.0）时触发
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew assembleRelease
+
+      - name: Sign APK
+        id: sign_app
+        uses: r0adkll/sign-android-release@v1
+        with:
+          releaseDirectory: app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          alias: ${{ secrets.ALIAS }}
+          keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
+        env:
+          BUILD_TOOLS_VERSION: "34.0.0"
+
+      - name: Rename APK
+        run: |
+          mv ${{ steps.sign_app.outputs.signedReleaseFile }} ChuBaichuan-TagAI-Fixed.apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: ChuBaichuan-TagAI-Fixed.apk
+          name: Release ${{ github.ref_name }}
+          body: |
+            ChuBaichuan-TagAI 修复版发布。
+            
+            ### 修复内容：
+            - 修复推荐页闪退问题（解决嵌套滚动冲突）。
+            - 优化 API 加载稳定性，增加自动降级机制。
+            - 移除不稳定的镜像地址，提升图片加载速度。
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
