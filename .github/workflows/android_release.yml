@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*' # 当推送以 v 开头的标签（如 v1.0.0）时触发
+  workflow_dispatch: # 支持在 Actions 页面手动触发，用于验证构建（不会创建 Release）
 
 permissions:
   contents: write
