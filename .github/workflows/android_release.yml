@@ -1,0 +1,71 @@
+name: Android CI/CD
+
+on:
+  push:
+    branches:
+      - main # push 到 main 分支时触发构建
+  workflow_dispatch: # 支持在 GitHub Actions 页面手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew assembleRelease
+
+      - name: Get version info
+        id: version
+        run: |
+          VERSION_NAME=$(grep 'versionName' app/build.gradle.kts | head -1 | sed "s/.*\"\(.*\)\"/\1/")
+          COMMIT_SHORT=${GITHUB_SHA::7}
+          TAG="v${VERSION_NAME}-${COMMIT_SHORT}"
+          echo "versionName=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "tagName=$TAG" >> $GITHUB_OUTPUT
+          echo "Built version: $VERSION_NAME, tag: $TAG"
+
+      - name: Find APK
+        id: find_apk
+        run: |
+          APK_PATH=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          echo "apkPath=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "Found APK: $APK_PATH"
+
+      - name: Rename APK
+        run: |
+          cp "${{ steps.find_apk.outputs.apkPath }}" "ChuBaichuan-TagAI-v${{ steps.version.outputs.versionName }}.apk"
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChuBaichuan-TagAI-v${{ steps.version.outputs.versionName }}
+          path: ChuBaichuan-TagAI-v${{ steps.version.outputs.versionName }}.apk
+
+      - name: Create Release and Upload APK
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tagName }}
+          name: ChuBaichuan-TagAI v${{ steps.version.outputs.versionName }}
+          body: |
+            ## 版本 ${{ steps.version.outputs.versionName }}
+
+            Commit: ${{ github.sha }}
+          files: ChuBaichuan-TagAI-v${{ steps.version.outputs.versionName }}.apk
+          draft: false
+          prerelease: false
