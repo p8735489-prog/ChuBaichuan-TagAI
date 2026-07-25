@@ -153,6 +153,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import androidx.compose.runtime.produceState
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -501,16 +502,15 @@ class MainActivity : ComponentActivity() {
         val savedLanguage = normalizeLanguageOption(prefs.getString(KEY_LANGUAGE, "system") ?: "system")
         applyAppLocale(this, savedLanguage)
         incomingSpecialLinkRecord = parseSpecialTagLink(intent)
-        availableAiModels = runCatching { TaggerEngine.scanModelConfigs(applicationContext) }.getOrDefault(emptyList())
+        // scanModelConfigs 涉及文件遍历，放到 IO 线程执行（loadAiModel 内部会扫描）
+        availableAiModels = emptyList()
         // 如果选中的模型已不存在（比如没有内置模型时默认选 built_in_model 会失效），
         // 自动回退到第一个可用模型；没有可用模型时才用默认占位。
         val savedModelId = prefs.getString(KEY_SELECTED_AI_MODEL_ID, TaggerEngine.DEFAULT_MODEL_ID)
             ?: TaggerEngine.DEFAULT_MODEL_ID
-        selectedAiModelId = availableAiModels.firstOrNull { it.id == savedModelId }?.id
-            ?: availableAiModels.firstOrNull()?.id
-            ?: TaggerEngine.DEFAULT_MODEL_ID
+        selectedAiModelId = savedModelId
 
-        loadAiModel(selectedAiModelId)
+        loadAiModel(savedModelId)
 
         setContent {
             var useDynamicColor by remember { mutableStateOf(prefs.getBoolean(KEY_DYNAMIC_COLOR, true)) }
@@ -721,8 +721,13 @@ class MainActivity : ComponentActivity() {
                                 engine.highPerformanceMode = it
                             },
                             onReloadAiModels = {
-                                availableAiModels = runCatching { TaggerEngine.scanModelConfigs(applicationContext) }.getOrDefault(emptyList())
-                                android.util.Log.d("MainActivity", "onReloadAiModels: ${availableAiModels.size} models")
+                                scope.launch {
+                                    val scanned = withContext(Dispatchers.IO) {
+                                        runCatching { TaggerEngine.scanModelConfigs(applicationContext) }.getOrDefault(emptyList())
+                                    }
+                                    availableAiModels = scanned
+                                    android.util.Log.d("MainActivity", "onReloadAiModels: ${scanned.size} models")
+                                }
                             },
                             onSelectAiModel = { modelId ->
                                 android.util.Log.d("MainActivity", "onSelectAiModel: $modelId")
@@ -777,9 +782,13 @@ class MainActivity : ComponentActivity() {
         isLoadingModel = true
         loadError = null
         lifecycleScope.launch {
-            availableAiModels = runCatching { TaggerEngine.scanModelConfigs(applicationContext) }.getOrDefault(emptyList())
-            val modelConfig = availableAiModels.firstOrNull { it.id == modelId }
-                ?: availableAiModels.firstOrNull()
+            // scanModelConfigs 涉及文件系统遍历，放到 IO 线程避免主线程卡顿/ANR
+            val scanned = withContext(Dispatchers.IO) {
+                runCatching { TaggerEngine.scanModelConfigs(applicationContext) }.getOrDefault(emptyList())
+            }
+            availableAiModels = scanned
+            val modelConfig = scanned.firstOrNull { it.id == modelId }
+                ?: scanned.firstOrNull()
                 ?: TaggerEngine.builtInModelConfig()
             val error = withContext(Dispatchers.IO) { engine.load(modelConfig) }
             if (error == null) {
@@ -1389,7 +1398,8 @@ fun TaggerScreen(
         val restoredTags = record.text.toTags()
         tags = restoredTags
         imageScore = scoreImage(null, restoredTags)
-        bitmap = loadBitmapFromRecord(record)
+        // 大图解码放到 IO 线程，避免主线程 OOM 闪退
+        bitmap = withContext(Dispatchers.IO) { loadBitmapFromRecord(record) }
         imageUri = null
         historyRecords = saveTagRecord(context, KEY_HISTORY_TAG_RECORDS, record.text)
         Toast.makeText(context, context.getString(R.string.special_link_loaded), Toast.LENGTH_SHORT).show()
@@ -1400,9 +1410,12 @@ fun TaggerScreen(
     ) { uri: Uri? ->
         if (uri != null) {
             imageUri = uri
-            bitmap = loadBitmap(context, uri)
-            tags = emptyList()
-            imageScore = null
+            // 大图解码放到 IO 线程，避免主线程 OOM 闪退
+            scope.launch {
+                bitmap = withContext(Dispatchers.IO) { loadBitmap(context, uri) }
+                tags = emptyList()
+                imageScore = null
+            }
         }
     }
 
@@ -1430,9 +1443,12 @@ fun TaggerScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            val message = importAiModelFile(context, uri)
-            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-            onReloadAiModels()
+            // 文件导入（复制/解压）放到 IO 线程，避免主线程卡顿/ANR
+            scope.launch {
+                val message = withContext(Dispatchers.IO) { importAiModelFile(context, uri) }
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                onReloadAiModels()
+            }
         }
     }
 
@@ -1440,11 +1456,14 @@ fun TaggerScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            val selectedBitmap = loadBitmap(context, uri)
-            if (selectedBitmap == null) {
-                Toast.makeText(context, context.getString(R.string.settings_custom_background_import_failed), Toast.LENGTH_LONG).show()
-            } else {
-                pendingCustomBackgroundBitmap = selectedBitmap
+            // 大图解码放到 IO 线程，避免主线程 OOM 闪退
+            scope.launch {
+                val selectedBitmap = withContext(Dispatchers.IO) { loadBitmap(context, uri) }
+                if (selectedBitmap == null) {
+                    Toast.makeText(context, context.getString(R.string.settings_custom_background_import_failed), Toast.LENGTH_LONG).show()
+                } else {
+                    pendingCustomBackgroundBitmap = selectedBitmap
+                }
             }
         }
     }
@@ -1955,7 +1974,10 @@ fun TaggerScreen(
                     val restoredTags = record.text.toTags()
                     tags = restoredTags
                     imageScore = scoreImage(null, restoredTags)
-                    bitmap = loadBitmapFromRecord(record)
+                    // 大图解码放到 IO 线程，避免主线程 OOM 闪退
+                    scope.launch {
+                        bitmap = withContext(Dispatchers.IO) { loadBitmapFromRecord(record) }
+                    }
                     imageUri = null
                     historyRecords = saveTagRecord(context, KEY_HISTORY_TAG_RECORDS, record.text, record.imagePath)
                     showParseLinkDialog = false
@@ -2022,12 +2044,15 @@ fun TaggerScreen(
             onBatchShare = { shareSpecialTagLinks(context, it) },
             onUse = {
                 val restoredTags = it.text.toTags()
-                val restoredBitmap = loadBitmapFromRecord(it)
                 tags = restoredTags
-                bitmap = restoredBitmap
                 imageUri = null
-                imageScore = scoreImage(restoredBitmap, restoredTags)
                 showFavoritesDialog = false
+                // 大图解码放到 IO 线程，避免主线程 OOM 闪退
+                scope.launch {
+                    val restoredBitmap = withContext(Dispatchers.IO) { loadBitmapFromRecord(it) }
+                    bitmap = restoredBitmap
+                    imageScore = scoreImage(restoredBitmap, restoredTags)
+                }
             },
             onDelete = {
                 confirmOrRun(true) {
@@ -2072,12 +2097,15 @@ fun TaggerScreen(
             onBatchShare = { shareSpecialTagLinks(context, it) },
             onUse = {
                 val restoredTags = it.text.toTags()
-                val restoredBitmap = loadBitmapFromRecord(it)
                 tags = restoredTags
-                bitmap = restoredBitmap
                 imageUri = null
-                imageScore = scoreImage(restoredBitmap, restoredTags)
                 showHistoryDialog = false
+                // 大图解码放到 IO 线程，避免主线程 OOM 闪退
+                scope.launch {
+                    val restoredBitmap = withContext(Dispatchers.IO) { loadBitmapFromRecord(it) }
+                    bitmap = restoredBitmap
+                    imageScore = scoreImage(restoredBitmap, restoredTags)
+                }
             },
             onDelete = {
                 confirmOrRun(true) {
@@ -2104,9 +2132,14 @@ fun TaggerScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         // 背景层
         if (useCustomBackgroundStyle && customBackgroundImagePath.isNotBlank()) {
-            val bitmap = remember(customBackgroundImagePath) {
-                customBackgroundImagePath.takeIf { it.isNotBlank() }
-                    ?.let { path -> loadBitmapFromPath(path, 2048) }
+            // 异步加载背景图，避免在主线程解码大 Bitmap 导致 OOM 闪退
+            val bitmap by produceState<Bitmap?>(null, customBackgroundImagePath) {
+                val path = customBackgroundImagePath.takeIf { it.isNotBlank() }
+                if (path != null) {
+                    value = withContext(Dispatchers.IO) { loadBitmapFromPath(path, 2048) }
+                } else {
+                    value = null
+                }
             }
             Box(
                 modifier = Modifier.fillMaxSize()
@@ -4045,8 +4078,14 @@ private fun HistoryImageTile(
     onOpen: () -> Unit,
     onLongPress: () -> Unit
 ) {
-    val previewBitmap = remember(record.imagePath) {
-        record.imagePath?.let { loadBitmapFromPath(it, 512) }
+    // 异步加载缩略图，避免在主线程解码多个 Bitmap 导致 OOM 闪退
+    val previewBitmap by produceState<Bitmap?>(null, record.imagePath) {
+        val path = record.imagePath
+        if (path != null) {
+            value = withContext(Dispatchers.IO) { loadBitmapFromPath(path, 384) }
+        } else {
+            value = null
+        }
     }
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
@@ -4246,8 +4285,14 @@ private fun HistoryImageDetailDialog(
     onDelete: () -> Unit,
     onPrompt: () -> Unit
 ) {
-    val previewBitmap = remember(record.imagePath) {
-        record.imagePath?.let { loadBitmapFromPath(it, 2048) }
+    // 异步加载大图，避免在主线程解码大 Bitmap 导致 OOM 闪退
+    val previewBitmap by produceState<Bitmap?>(null, record.imagePath) {
+        val path = record.imagePath
+        if (path != null) {
+            value = withContext(Dispatchers.IO) { loadBitmapFromPath(path, 2048) }
+        } else {
+            value = null
+        }
     }
     var imageScale by remember(record.id) { mutableStateOf(1f) }
     var imageOffset by remember(record.id) { mutableStateOf(Offset.Zero) }
@@ -6498,310 +6543,10 @@ fun TranslateLanguageDialog(
 }
 
 /**
- * 常用 WD Tagger 标签的本地翻译词典。
- * 优先使用本地词典，避免依赖在线 API 导致的配额超限和翻译质量差的问题。
- * 未命中的标签会回退到 MyMemory API。
- */
-private val LOCAL_TAG_DICTIONARY_ZH = mapOf(
-    // 人数/主体
-    "solo" to "单人", "1girl" to "1个女孩", "1boy" to "1个男孩", "2girls" to "2个女孩",
-    "2boys" to "2个男孩", "multiple_girls" to "多个女孩", "multiple_boys" to "多个男孩",
-    "group" to "群组", "crowd" to "人群", "no_humans" to "无人物", "general" to "通用",
-    "person" to "人物", "people" to "人们", "human" to "人类", "character_name" to "角色名称",
-    "male" to "男性", "female" to "女性", "boy" to "男孩", "girl" to "女孩",
-    "multiple_girls" to "多个女孩", "multiple_boys" to "多个男孩",
-    // 头发
-    "long_hair" to "长发", "short_hair" to "短发", "very_long_hair" to "超长发",
-    "white_hair" to "白发", "black_hair" to "黑发", "blonde_hair" to "金发",
-    "brown_hair" to "棕发", "blue_hair" to "蓝发", "pink_hair" to "粉发",
-    "red_hair" to "红发", "green_hair" to "绿发", "purple_hair" to "紫发",
-    "silver_hair" to "银发", "grey_hair" to "灰发", "orange_hair" to "橙发",
-    "aqua_hair" to "水蓝发", "gradient_hair" to "渐变发色", "multicolored_hair" to "多色头发",
-    "twintails" to "双马尾", "ponytail" to "马尾", "side_ponytail" to "侧马尾",
-    "drill_hair" to "螺旋卷发", "curly_hair" to "卷发", "wavy_hair" to "波浪卷发",
-    "straight_hair" to "直发", "messy_hair" to "凌乱头发", "spiky_hair" to "刺猬头",
-    "bob_cut" to "波波头", "hime_cut" to "姬发式", "blunt_bangs" to "齐刘海",
-    "hair_bun" to "丸子头", "double_bun" to "双丸子头", "ahoge" to "呆毛",
-    "bangs" to "刘海", "swept_bangs" to "斜刘海", "hair_between_eyes" to "眼中刘海",
-    "hair_ornament" to "发饰", "hairclip" to "发夹", "hairband" to "发带",
-    "hair_tie" to "发绳", "braid" to "辫子", "side_braid" to "侧辫",
-    // 眼睛
-    "blue_eyes" to "蓝眼", "red_eyes" to "红眼", "green_eyes" to "绿眼",
-    "brown_eyes" to "棕眼", "purple_eyes" to "紫眼", "yellow_eyes" to "黄眼",
-    "pink_eyes" to "粉眼", "gold_eyes" to "金眼", "aqua_eyes" to "水蓝眼",
-    "orange_eyes" to "橙眼", "heterochromia" to "异色瞳", "closed_eyes" to "闭眼",
-    "half-closed_eyes" to "半闭眼", "one_eye_closed" to "单眼闭", "empty_eyes" to "空洞眼神",
-    "glowing_eyes" to "发光眼睛", "sparkling_eyes" to "闪亮眼睛",
-    // 表情
-    "smile" to "微笑", "open_mouth" to "张嘴", "closed_mouth" to "闭嘴",
-    "fang" to "虎牙", "blush" to "脸红", "light_blush" to "微红",
-    "tears" to "眼泪", "crying" to "哭泣", "angry" to "生气",
-    "surprised" to "惊讶", "embarrassed" to "尴尬", "happy" to "开心",
-    "grin" to "咧嘴笑", "pout" to "嘟嘴", "bored" to "无聊",
-    "serious" to "严肃", "sad" to "悲伤", "confused" to "困惑",
-    "shy" to "害羞", "determined" to "坚定", "sleepy" to "困倦",
-    // 服装
-    "dress" to "连衣裙", "skirt" to "裙子", "shirt" to "衬衫",
-    "uniform" to "制服", "school_uniform" to "校服", "kimono" to "和服",
-    "jacket" to "外套", "coat" to "大衣", "sweater" to "毛衣",
-    "bikini" to "比基尼", "swimsuit" to "泳装", "lingerie" to "内衣",
-    "hat" to "帽子", "cap" to "鸭舌帽", "beret" to "贝雷帽",
-    "ribbon" to "丝带", "bow" to "蝴蝶结", "gloves" to "手套",
-    "thighhighs" to "大腿袜", "pantyhose" to "连裤袜", "stockings" to "长筒袜",
-    "shoes" to "鞋子", "boots" to "靴子", "sandals" to "凉鞋",
-    "scarf" to "围巾", "cape" to "披风", "hood" to "兜帽",
-    "sleeves" to "袖子", "long_sleeves" to "长袖", "short_sleeves" to "短袖",
-    "detached_sleeves" to "分离袖", "collar" to "衣领",
-    "apron" to "围裙", "maid" to "女仆装", "nurse" to "护士装",
-    "serafuku" to "水手服", "blazer" to "西装外套", "cardigan" to "开衫",
-    "hoodie" to "连帽衫", "tank_top" to "背心", "crop_top" to "短上衣",
-    "jeans" to "牛仔裤", "shorts" to "短裤", "panties" to "内裤",
-    "bra" to "胸罩", "garter_belt" to "吊袜带", "corset" to "束腰",
-    // 身体
-    "small_breasts" to "贫乳", "medium_breasts" to "中等胸部", "large_breasts" to "巨乳",
-    "huge_breasts" to "超巨乳", "flat_chest" to "平胸", "navel" to "肚脐",
-    "midriff" to "露腹", "thighs" to "大腿", "slender" to "苗条",
-    "petite" to "娇小", "muscular" to "肌肉",
-    // 姿势/动作
-    "standing" to "站立", "sitting" to "坐着", "lying" to "躺着",
-    "kneeling" to "跪着", "crouching" to "蹲着", "walking" to "行走",
-    "running" to "跑步", "jumping" to "跳跃", "leaning_forward" to "前倾",
-    "looking_at_viewer" to "看着镜头", "looking_back" to "回头看",
-    "looking_away" to "看向别处", "looking_to_the_side" to "看向侧面",
-    "from_above" to "俯视", "from_behind" to "从背后", "from_side" to "侧面",
-    "upper_body" to "上半身", "cowboy_shot" to "牛仔镜头",
-    "portrait" to "肖像", "full_body" to "全身", "close-up" to "特写",
-    "arms_up" to "双手抬起", "arms_crossed" to "交叉双臂",
-    "hand_on_hip" to "手叉腰", "hand_on_own_chest" to "手放胸前",
-    "waving" to "挥手", "salute" to "敬礼", "stretching" to "伸展",
-    "yawning" to "打哈欠", "sleeping" to "睡觉", "reading" to "阅读",
-    // 场景
-    "outdoors" to "户外", "indoors" to "室内", "sky" to "天空",
-    "night" to "夜晚", "day" to "白天", "city" to "城市",
-    "room" to "房间", "bedroom" to "卧室", "school" to "学校",
-    "forest" to "森林", "beach" to "海滩", "scenery" to "风景",
-    "background" to "背景", "simple_background" to "简单背景",
-    "white_background" to "白色背景", "black_background" to "黑色背景",
-    "blue_sky" to "蓝天", "clouds" to "云", "sunlight" to "阳光",
-    "moonlight" to "月光", "water" to "水", "pool" to "水池",
-    "classroom" to "教室", "library" to "图书馆", "kitchen" to "厨房",
-    "bathroom" to "浴室", "street" to "街道", "park" to "公园",
-    "mountain" to "山", "ocean" to "海洋", "river" to "河流",
-    "sunset" to "日落", "sunrise" to "日出", "dusk" to "黄昏",
-    // 质量/风格
-    "masterpiece" to "杰作", "best_quality" to "最佳质量", "highres" to "高分辨率",
-    "absurdres" to "超高分辨率", "detailed" to "精细", "beautiful" to "美丽",
-    "illustration" to "插画", "sketch" to "素描", "anime" to "动漫风格",
-    "3d" to "3D", "realistic" to "写实", "chibi" to "Q版",
-    "ultra-detailed" to "超精细", "8k" to "8K分辨率", "4k" to "4K分辨率",
-    "cinematic_lighting" to "电影光影", "dramatic_lighting" to "戏剧光影",
-    // 其他常见标签
-    "animal" to "动物", "cat" to "猫", "dog" to "狗",
-    "bird" to "鸟", "flower" to "花", "tree" to "树",
-    "book" to "书", "sword" to "剑", "gun" to "枪",
-    "glasses" to "眼镜", "headphones" to "耳机", "mask" to "面具",
-    "tail" to "尾巴", "wings" to "翅膀", "horns" to "角",
-    "earrings" to "耳环", "necklace" to "项链", "ring" to "戒指",
-    "umbrella" to "伞", "fan" to "扇子", "lantern" to "灯笼",
-    "cherry_blossoms" to "樱花", "snow" to "雪", "rain" to "雨",
-    "food" to "食物", "drink" to "饮料", "crown" to "皇冠",
-    "veil" to "面纱", "halo" to "光环", "aura" to "气场",
-    "lightning" to "闪电", "fire" to "火焰", "smoke" to "烟",
-    "stars" to "星星", "galaxy" to "银河", "universe" to "宇宙",
-    "magic" to "魔法", "crystal" to "水晶", "gem" to "宝石",
-    "key" to "钥匙", "clock" to "时钟", "camera" to "相机",
-    "phone" to "手机", "computer" to "电脑", "piano" to "钢琴",
-    "guitar" to "吉他", "violin" to "小提琴",
-    // 常见作品/系列
-    "pokemon" to "宝可梦", "azur_lane" to "碧蓝航线", "kancolle" to "舰队Collection",
-    "blue_archive" to "蔚蓝档案", "fate" to "命运", "ff14" to "最终幻想14",
-    "genshin_impact" to "原神", "honkai" to "崩坏", "arknights" to "明日方舟",
-    "hololive" to "hololive", "nijisanji" to "彩虹社",
-    "doki_doki_literature_club" to "心跳文学部", "ib" to "IB",
-    "polar_chaldea_uniform" to "极地迦勒底制服",
-    // 颜色
-    "black" to "黑色", "white" to "白色", "red" to "红色", "blue" to "蓝色",
-    "green" to "绿色", "yellow" to "黄色", "purple" to "紫色", "pink" to "粉色",
-    "orange" to "橙色", "brown" to "棕色", "grey" to "灰色", "silver" to "银色",
-    "gold" to "金色", "aqua" to "水蓝色",
-    // 通用修饰词
-    "long" to "长", "short" to "短", "large" to "大", "small" to "小",
-    "cute" to "可爱", "cool" to "酷", "sexy" to "性感", "elegant" to "优雅",
-    "dark" to "暗", "light" to "亮", "shiny" to "闪亮", "transparent" to "透明",
-    // 文字/文本相关
-    "text" to "文字", "english_text" to "英文文字", "japanese_text" to "日文文字",
-    "chinese_text" to "中文文字", "signature" to "签名", "watermark" to "水印",
-    "logo" to "标志", "lettering" to "字体", "text_focus" to "文字聚焦",
-    "written_text" to "手写文字", "caption" to "说明文字",
-    // 主题/风格相关
-    "theme" to "主题", "purple_theme" to "紫色主题", "blue_theme" to "蓝色主题",
-    "red_theme" to "红色主题", "green_theme" to "绿色主题", "pink_theme" to "粉色主题",
-    "white_theme" to "白色主题", "black_theme" to "黑色主题",
-    "monochrome" to "单色", "grayscale" to "灰度", "sepia" to "棕褐色",
-    "high_contrast" to "高对比度", "low_contrast" to "低对比度",
-    // 艺术/创作相关
-    "art" to "艺术", "fanart" to "同人图", "original" to "原创",
-    "cg" to "CG", "game_cg" to "游戏CG", "visual_novel" to "视觉小说",
-    "still_life" to "静物", "landscape" to "风景画", "portrait" to "肖像",
-    "abstract" to "抽象", "minimalist" to "极简", "retro" to "复古",
-    "vintage" to "怀旧", "steampunk" to "蒸汽朋克", "cyberpunk" to "赛博朋克",
-    "gothic" to "哥特", "fantasy" to "幻想", "sci-fi" to "科幻",
-    // 混合/效果相关
-    "blending" to "混合", "blur" to "模糊", "blurry" to "模糊的",
-    "bokeh" to "散景", "depth_of_field" to "景深", "lens_flare" to "镜头光晕",
-    "vignette" to "暗角", "gradient" to "渐变", "glow" to "发光",
-    "shadow" to "阴影", "reflection" to "倒影", "silhouette" to "剪影",
-    // 类型/分类相关
-    "tag" to "标签", "tags" to "标签", "category" to "分类",
-    "character" to "角色", "series" to "系列", "copyright" to "版权",
-    "artist" to "画师", "metadata" to "元数据",
-    // 摄影相关
-    "photo" to "照片", "photography" to "摄影", "photorealistic" to "照片级写实",
-    "selfie" to "自拍", "screenshot" to "截图",
-    // 布局/构图相关
-    "centered" to "居中", "asymmetric" to "不对称", "symmetrical" to "对称",
-    "cropped" to "裁剪", "border" to "边框", "frame" to "框架",
-    "panel" to "分格", "split" to "分割", "collage" to "拼贴",
-    // 状态/条件相关
-    "wet" to "湿润", "dry" to "干燥", "broken" to "破碎",
-    "old" to "旧的", "new" to "新的", "ancient" to "古老的",
-    "modern" to "现代的", "futuristic" to "未来感",
-    // 天气/环境
-    "fog" to "雾", "mist" to "薄雾", "storm" to "暴风雨",
-    "wind" to "风", "cloudy" to "多云", "clear_sky" to "晴空",
-    "aurora" to "极光", "rainbow" to "彩虹",
-    // 材质/纹理
-    "metal" to "金属", "wood" to "木材", "stone" to "石头",
-    "glass" to "玻璃", "fabric" to "布料", "leather" to "皮革",
-    "paper" to "纸", "plastic" to "塑料", "rubber" to "橡胶",
-    "velvet" to "天鹅绒", "silk" to "丝绸", "cotton" to "棉",
-    // 季节
-    "spring" to "春天", "summer" to "夏天", "autumn" to "秋天", "winter" to "冬天",
-    // 时间
-    "dawn" to "黎明", "noon" to "正午", "evening" to "傍晚", "midnight" to "午夜",
-    "twilight" to "暮光",
-    // 光照
-    "backlighting" to "背光", "rim_lighting" to "边缘光",
-    "soft_lighting" to "柔光", "harsh_lighting" to "强光",
-    "natural_light" to "自然光", "artificial_light" to "人造光",
-    // 情绪/氛围
-    "mood" to "氛围", "atmosphere" to "气氛", "lonely" to "孤独",
-    "peaceful" to "宁静", "mysterious" to "神秘", "horror" to "恐怖",
-    "romantic" to "浪漫", "melancholy" to "忧郁", "nostalgic" to "怀旧",
-    "epic" to "史诗", "dreamy" to "梦幻",
-    // 补充常见 WD tagger 标签
-    "limited_palette" to "有限色板", "one-eyed" to "独眼", "one_eye" to "独眼",
-    "palette" to "色板", "limited" to "有限的", "theme" to "主题",
-    "focus" to "聚焦", "english" to "英文", "japanese" to "日文", "chinese" to "中文",
-    "character" to "角色", "name" to "名称", "human" to "人类", "humans" to "人类",
-    "blend" to "混合", "blended" to "混合的",
-    "monochrome" to "单色", "grayscale" to "灰度",
-    "high_contrast" to "高对比度", "low_contrast" to "低对比度",
-    "dutch_angle" to "荷兰角", "fisheye" to "鱼眼", "wide_shot" to "广角镜头",
-    "crop" to "裁剪", "cropped" to "裁剪的", "out_of_frame" to "出框",
-    "head_only" to "仅头部", "bust" to "半身像", "cowboy_shot" to "牛仔镜头",
-    "feet_out_of_frame" to "脚部出框", "out_of_bounds" to "超出边界",
-    "simple" to "简单", "complex" to "复杂", "detailed" to "精细",
-    "intricate" to "错综复杂", "ornate" to "华丽", "plain" to "朴素",
-    "aesthetic" to "美学", "retro" to "复古", "vintage" to "怀旧",
-    "negative_space" to "留白", "rule_of_thirds" to "三分法",
-    "symmetry" to "对称", "asymmetry" to "不对称",
-    "depth_of_field" to "景深", "shallow_depth_of_field" to "浅景深",
-    "bokeh" to "散景", "lens_flare" to "镜头光晕",
-    "motion_blur" to "运动模糊", "focus_blur" to "焦外模糊",
-    "pixel_art" to "像素画", "vector" to "矢量图", "cel_shading" to "赛璐璐上色",
-    "flat_color" to "平涂", "gradient" to "渐变", "rainbow" to "彩虹",
-    "pastel" to "粉彩", "neon" to "霓虹", "fluorescent" to "荧光",
-    "glowing" to "发光", "shiny" to "闪亮", "sparkle" to "闪烁",
-    "luminous" to "发光的", "radiant" to "光芒四射",
-    // 更多常见标签
-    "animal_ears" to "兽耳", "cat_ears" to "猫耳", "dog_ears" to "犬耳",
-    "fox_ears" to "狐耳", "rabbit_ears" to "兔耳", "wolf_ears" to "狼耳",
-    "tail" to "尾巴", "fluffy_tail" to "蓬松尾巴", "cat_tail" to "猫尾",
-    "fox_tail" to "狐尾", "demon_tail" to "恶魔尾巴",
-    "horns" to "角", "demon_horns" to "恶魔角", "goat_horns" to "山羊角",
-    "halo" to "光环", "angel_wings" to "天使翅膀", "demon_wings" to "恶魔翅膀",
-    "fairy_wings" to "妖精翅膀", "butterfly_wings" to "蝴蝶翅膀",
-    "fang" to "虎牙", "sharp_teeth" to "尖牙", "claws" to "爪子",
-    "scales" to "鳞片", "fur" to "毛发", "feathers" to "羽毛",
-    "gills" to "鳃", "fin" to "鳍", "antenna" to "触角",
-    "pokemon_creature" to "宝可梦", "creature" to "生物",
-    "monster" to "怪物", "dragon" to "龙", "wyvern" to "飞龙",
-    "phoenix" to "凤凰", "unicorn" to "独角兽", "pegasus" to "天马",
-    // 视角/构图补充
-    "from_below" to "仰视", "from_above" to "俯视", "from_behind" to "从背后",
-    "from_side" to "侧面", "from_outside" to "从外向内",
-    "pov" to "第一人称视角", "first_person" to "第一人称",
-    "wide_angle" to "广角", "telephoto" to "长焦",
-    "aerial_view" to "航拍", "bird's-eye_view" to "鸟瞰",
-    "worm's-eye_view" to "虫眼视角", "dutch_tilt" to "倾斜构图",
-    // 质量补充
-    "quality" to "质量", "resolution" to "分辨率", "high_definition" to "高清",
-    "ultra_high_definition" to "超高清", "4k_resolution" to "4K分辨率",
-    "8k_resolution" to "8K分辨率", "hd" to "高清", "uhd" to "超高清",
-    "uncensored" to "无修正", "censored" to "有修正",
-    // 其他
-    "grey_background" to "灰色背景", "transparent_background" to "透明背景",
-    "gradient_background" to "渐变背景", "blurry_background" to "模糊背景",
-    "indoor" to "室内", "outdoor" to "户外",
-    "fantasy" to "幻想", "sci_fi" to "科幻", "horror" to "恐怖",
-    "steampunk" to "蒸汽朋克", "cyberpunk" to "赛博朋克",
-    "gothic" to "哥特", "baroque" to "巴洛克", "art_nouveau" to "新艺术",
-    "art_deco" to "装饰艺术", "impressionist" to "印象派",
-    "watercolor" to "水彩", "oil_painting" to "油画", " acrylic" to "丙烯画"
-)
-
-private val LOCAL_TAG_DICTIONARY_JA = mapOf(
-    "solo" to "ソロ", "1girl" to "少女1人", "1boy" to "少年1人",
-    "long_hair" to "ロングヘア", "short_hair" to "ショートヘア",
-    "blue_eyes" to "青い目", "red_eyes" to "赤い目", "green_eyes" to "緑の目",
-    "smile" to "微笑み", "blush" to "赤面", "open_mouth" to "口開け",
-    "dress" to "ドレス", "skirt" to "スカート", "uniform" to "制服",
-    "standing" to "立ち姿", "sitting" to "座り", "looking_at_viewer" to "見つめ合い",
-    "outdoors" to "屋外", "indoors" to "屋内", "sky" to "空",
-    "masterpiece" to "傑作", "best_quality" to "最高品質", "highres" to "高解像度"
-)
-
-private val LOCAL_TAG_DICTIONARY_KO = mapOf(
-    "solo" to "솔로", "1girl" to "소녀 1명", "1boy" to "소년 1명",
-    "long_hair" to "긴 머리", "short_hair" to "짧은 머리",
-    "blue_eyes" to "파란 눈", "red_eyes" to "빨간 눈", "green_eyes" to "초록 눈",
-    "smile" to "미소", "blush" to "홍조", "open_mouth" to "입 벌림",
-    "dress" to "드레스", "skirt" to "치마", "uniform" to "제복",
-    "standing" to "서 있음", "sitting" to "앉아 있음", "looking_at_viewer" to "응시",
-    "outdoors" to "야외", "indoors" to "실내", "sky" to "하늘",
-    "masterpiece" to "걸작", "best_quality" to "최고 품질", "highres" to "고해상도"
-)
-
-private val LOCAL_TAG_DICTIONARY_RU = mapOf(
-    "solo" to "соло", "1girl" to "1 девушка", "1boy" to "1 парень",
-    "long_hair" to "длинные волосы", "short_hair" to "короткие волосы",
-    "blue_eyes" to "голубые глаза", "red_eyes" to "красные глаза", "green_eyes" to "зелёные глаза",
-    "smile" to "улыбка", "blush" to "румянец", "open_mouth" to "открытый рот",
-    "dress" to "платье", "skirt" to "юбка", "uniform" to "униформа",
-    "standing" to "стоя", "sitting" to "сидя", "looking_at_viewer" to "смотрит на зрителя",
-    "outdoors" to "на улице", "indoors" to "в помещении", "sky" to "небо",
-    "masterpiece" to "шедевр", "best_quality" to "лучшее качество", "highres" to "высокое разрешение"
-)
-
-/**
- * 获取本地翻译词典，根据目标语言返回对应的词典。
- */
-private fun getLocalDictionary(targetLang: String): Map<String, String>? {
-    return when (targetLang) {
-        "zh" -> LOCAL_TAG_DICTIONARY_ZH
-        "ja" -> LOCAL_TAG_DICTIONARY_JA
-        "ko" -> LOCAL_TAG_DICTIONARY_KO
-        "ru" -> LOCAL_TAG_DICTIONARY_RU
-        else -> null
-    }
-}
-
-/**
- * 调用 MyMemory 免费翻译 API 批量翻译标签。
- * 优先使用本地词典，未命中的标签回退到在线 API。
- * API 翻译失败时，尝试用本地词典的子词匹配作为兜底。
+ * 纯 API 翻译：所有标签通过 MyMemory API 翻译，不使用本地词典。
+ * 每个标签都调用 API，确保翻译完整性。
  * 带有 responseStatus 检查，避免 API 配额超限时返回警告文本。
+ * 每次请求间加入延迟，避免触发 API 速率限制。
  */
 private fun translateTagsOnline(tags: List<String>, targetLang: String): List<Pair<String, String>> {
     val langCode = when (targetLang) {
@@ -6811,69 +6556,19 @@ private fun translateTagsOnline(tags: List<String>, targetLang: String): List<Pa
         "ru" -> "ru"
         else -> "en"
     }
-    val localDict = getLocalDictionary(targetLang)
     val results = mutableListOf<Pair<String, String>>()
-    for (tag in tags) {
-        // 规范化标签名：去除首尾空白、不可见字符，统一小写
-        val normalizedTag = tag.trim().trim('\uFEFF').lowercase()
-        // 1. 优先使用本地词典完整匹配（用规范化后的 key）
-        val localTranslation = localDict?.get(normalizedTag)
-            ?: localDict?.get(tag.trim())
-        if (localTranslation != null) {
-            results.add(tag to localTranslation)
-            continue
-        }
-        // 1b. 尝试将空格转为下划线后再查词典（如 "no humans" -> "no_humans"）
-        val underscoreVariant = normalizedTag.replace(' ', '_')
-        val underscoreMatch = localDict?.get(underscoreVariant)
-        if (underscoreMatch != null) {
-            results.add(tag to underscoreMatch)
-            continue
-        }
-        // 2. 回退到在线 API
-        var translated = translateSingleTag(tag, langCode)
-        // 3. 如果 API 翻译失败（返回了去下划线的原文），尝试子词匹配兜底
-        val cleanedTag = tag.replace('_', ' ').replace('-', ' ').trim()
-        if (translated == cleanedTag || translated == tag || translated.equals(cleanedTag, ignoreCase = true)) {
-            val fallback = trySubWordMatch(tag, localDict)
-            if (fallback != null) {
-                translated = fallback
-            }
-        }
+    for ((index, tag) in tags.withIndex()) {
+        // 直接调用 API 翻译，不使用本地词典
+        val translated = translateSingleTag(tag, langCode)
         results.add(tag to translated)
+        // 每次请求后加 300ms 延迟，避免触发 MyMemory API 速率限制
+        // 最后一个标签不需要等待
+        if (index < tags.size - 1) {
+            try { Thread.sleep(300L) } catch (_: InterruptedException) {}
+        }
     }
     return results
 }
-
-/**
- * 子词匹配兜底：将标签按下划线/连字符拆分，尝试用本地词典逐词翻译。
- * 只有当所有子词都能在词典中找到时才返回结果，避免翻译不完整。
- * 例如 "purple_theme" -> ["purple", "theme"] -> "紫色主题"
- */
-private fun trySubWordMatch(tag: String, localDict: Map<String, String>?): String? {
-    if (localDict == null) return null
-    val parts = tag.split('_', '-').filter { it.isNotBlank() }
-    if (parts.size < 2) return null
-    // 尝试逐词翻译，即使部分子词未匹配也拼接结果（未匹配的保留原文）
-    val translatedParts = parts.map { part ->
-        localDict[part] ?: localDict[part.lowercase()] ?: part.replace('_', ' ')
-    }
-    // 至少有一个子词被翻译了才返回结果
-    val anyTranslated = parts.indices.any { i ->
-        val p = parts[i]
-        localDict[p] != null || localDict[p.lowercase()] != null
-    }
-    if (!anyTranslated) return null
-    return translatedParts.joinToString("")
-}
-
-/**
- * 翻译单个标签。
- * 对带下划线/连字符的标签，转换为空格后再翻译。
- * 对数字开头的标签（1girl、2boys），分离数字和文字分别翻译。
- * 对带括号的标签（如 hex_maniac_(pokemon)），分别翻译主词和括号内容。
- * 检查 API responseStatus，过滤掉配额超限时的警告文本。
- */
 private fun translateSingleTag(tag: String, langCode: String): String {
     // 带括号的标签：如 hex_maniac_(pokemon), haruka_(blue_archive)
     val parenPattern = Regex("^(.+?)_?\\((.+)\\)$")
@@ -6882,6 +6577,10 @@ private fun translateSingleTag(tag: String, langCode: String): String {
         val mainPart = parenMatch.groupValues[1].replace('_', ' ').replace('-', ' ').trim()
         val parenContent = parenMatch.groupValues[2].replace('_', ' ').replace('-', ' ').trim()
         val mainTranslated = if (mainPart.isNotBlank()) callMyMemory(mainPart, langCode) else ""
+        // 括号内容翻译后加短暂延迟
+        if (mainPart.isNotBlank() && parenContent.isNotBlank()) {
+            try { Thread.sleep(200L) } catch (_: InterruptedException) {}
+        }
         val parenTranslated = if (parenContent.isNotBlank()) callMyMemory(parenContent, langCode) else ""
         val targetLang = when (langCode) {
             "zh-CN" -> "zh"
@@ -6906,17 +6605,33 @@ private fun translateSingleTag(tag: String, langCode: String): String {
 
 private fun callMyMemory(text: String, langCode: String): String {
     if (text.isBlank()) return text
-    val maxRetries = 3
+    val maxRetries = 4
     var lastResult: String = text
     for (attempt in 1..maxRetries) {
         val result = callMyMemoryOnce(text, langCode)
         // 如果翻译结果和原文不同，说明翻译成功
-        if (result != text) return result
-        // 如果失败，短暂等待后重试（递增等待）
+        if (result != text && result.isNotBlank()) return result
+        // 如果失败，等待后重试（递增等待：500ms, 1000ms, 1500ms）
         if (attempt < maxRetries) {
             try { Thread.sleep((500L * attempt)) } catch (_: InterruptedException) {}
         }
         lastResult = result
+    }
+    // 所有重试都返回原文，尝试用首字母大写格式再翻译一次
+    if (lastResult == text) {
+        val capitalized = text.split(' ').joinToString(" ") { word ->
+            if (word.isNotEmpty()) {
+                word.lowercase().replaceFirstChar { c -> c.uppercaseChar() }
+            } else {
+                word
+            }
+        }
+        if (capitalized != text) {
+            val capResult = callMyMemoryOnce(capitalized, langCode)
+            if (capResult != capitalized && capResult.isNotBlank() && capResult != text) {
+                return capResult
+            }
+        }
     }
     return lastResult
 }
@@ -6925,12 +6640,12 @@ private fun callMyMemoryOnce(text: String, langCode: String): String {
     if (text.isBlank()) return text
     return try {
         val encoded = java.net.URLEncoder.encode(text, "UTF-8")
-        // 添加 de 参数，将每日配额从 5000 提升到 50000 字符
-        val url = java.net.URL("https://api.mymemory.translated.net/get?q=$encoded&langpair=en|$langCode&de=localcueword@app")
+        // 使用有效邮箱格式，将每日配额从 5000 提升到 50000 字符
+        val url = java.net.URL("https://api.mymemory.translated.net/get?q=$encoded&langpair=en|$langCode&de=waifutagger@gmail.com")
         val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
             connectTimeout = 15_000
             readTimeout = 15_000
-            setRequestProperty("User-Agent", "LocalCueWord/1.0 (Android)")
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Android; WaifuTaggerCN)")
             instanceFollowRedirects = true
         }
         try {
