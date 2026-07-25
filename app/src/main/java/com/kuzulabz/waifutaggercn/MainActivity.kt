@@ -4361,7 +4361,7 @@ private fun HistoryImageDetailDialog(
                     contentAlignment = Alignment.Center
                 ) {
                     Image(
-                        bitmap = currentPreviewBitmap.asImageBitmap(),
+                        bitmap = previewBitmap!!.asImageBitmap(),
                         contentDescription = null,
                         contentScale = ContentScale.Fit,
                         modifier = Modifier
