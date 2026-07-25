@@ -513,6 +513,7 @@ class MainActivity : ComponentActivity() {
         loadAiModel(savedModelId)
 
         setContent {
+            val scope = rememberCoroutineScope()
             var useDynamicColor by remember { mutableStateOf(prefs.getBoolean(KEY_DYNAMIC_COLOR, true)) }
             var themeStyle by remember { mutableStateOf(prefs.getString(KEY_THEME_STYLE, THEME_STYLE_MONET) ?: THEME_STYLE_MONET) }
             var monetPalette by remember { mutableStateOf(prefs.getString(KEY_MONET_PALETTE, MONET_PALETTE_DEVICE) ?: MONET_PALETTE_DEVICE) }
@@ -2144,9 +2145,10 @@ fun TaggerScreen(
             Box(
                 modifier = Modifier.fillMaxSize()
             ) {
-                if (bitmap != null) {
+                val currentBitmap = bitmap
+                if (currentBitmap != null) {
                     Image(
-                        bitmap = bitmap.asImageBitmap(),
+                        bitmap = currentBitmap.asImageBitmap(),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
@@ -4125,9 +4127,10 @@ private fun HistoryImageTile(
             )
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            if (previewBitmap != null) {
+            val currentPreviewBitmap = previewBitmap
+            if (currentPreviewBitmap != null) {
                 Image(
-                    bitmap = previewBitmap.asImageBitmap(),
+                    bitmap = currentPreviewBitmap.asImageBitmap(),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
@@ -4358,7 +4361,7 @@ private fun HistoryImageDetailDialog(
                     contentAlignment = Alignment.Center
                 ) {
                     Image(
-                        bitmap = previewBitmap.asImageBitmap(),
+                        bitmap = currentPreviewBitmap.asImageBitmap(),
                         contentDescription = null,
                         contentScale = ContentScale.Fit,
                         modifier = Modifier
