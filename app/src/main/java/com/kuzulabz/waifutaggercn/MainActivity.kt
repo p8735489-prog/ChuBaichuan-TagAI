@@ -1240,20 +1240,15 @@ fun TaggerScreen(
         )
     }
     var selectedMainTab by remember { mutableStateOf(0) }
-    // 记录上一次的 tab，用于判断切换是否涉及模型页
-    var prevMainTab by remember { mutableStateOf(0) }
     // 切换主标签页时自动回到顶部。用 selectedMainTab 作为 LaunchedEffect 的 key，
     // 切换时会自动取消上一次尚未完成的滚动动画，避免快速连点底部导航栏时
     // 多个 animateScrollTo 叠加导致的卡顿与画面抖动。
     //
-    // 注意：模型页(tab 2)有独立的内部滚动 modelScrollState，外层 mainScrollState
-    // 在模型页期间未绑定。从模型页切出时外层 verticalScroll 重新绑定，会与退出动画
-    // 中的模型页形成嵌套同方向滚动，此时调用 animateScrollTo 会闪退。
-    // 因此只在「非模型页 → 非模型页」切换时才滚动到顶部。
+    // 说明：所有标签页（含模型页 tab 2）共用同一个外层 mainScrollState，模型页
+    // 不再使用独立的内部滚动。这样切出模型页时不会再出现“外层 verticalScroll 与
+    // 退出动画中的模型页形成同方向嵌套滚动”的测量异常（即切换闪退）。
     LaunchedEffect(selectedMainTab) {
-        val fromTab = prevMainTab
-        prevMainTab = selectedMainTab
-        if (selectedMainTab != 2 && fromTab != 2 && mainScrollState.value > 0) {
+        if (mainScrollState.value > 0) {
             try {
                 mainScrollState.animateScrollTo(0)
             } catch (_: Exception) {
@@ -2266,7 +2261,7 @@ fun TaggerScreen(
                 .padding(horizontal = 20.dp)
                 .padding(top = 6.dp, bottom = 16.dp)
                 .padding(bottom = 12.dp)
-                .then(if (selectedMainTab != 2) Modifier.verticalScroll(mainScrollState) else Modifier),
+                .verticalScroll(mainScrollState),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             AnimatedVisibility(visible = selectedMainTab != 3 && selectedMainTab != 2 && loadError != null) {
@@ -2348,10 +2343,11 @@ fun TaggerScreen(
             AnimatedContent(
                 targetState = selectedMainTab,
                 transitionSpec = {
-                    // 缩短过渡时长 + 仅做轻微纵向位移，降低快速切换底部导航栏时的重排开销，
-                    // 避免大尺寸内容逐帧插值带来的掉帧卡顿。
-                    (fadeIn(animationSpec = tween(220)) + slideInVertically(animationSpec = tween(220)) { it / 12 }) togetherWith
-                        (fadeOut(animationSpec = tween(180)) + slideOutVertically(animationSpec = tween(180)) { -it / 12 })
+                    // 仅做淡入淡出，不做纵向位移。外层是 verticalScroll（无限高度约束），
+                    // slideIn/slideOutVertically 在过渡期需基于内容高度计算位移，
+                    // 与无限高度 + 双内容并存的测量叠加时可能触发崩溃。纯 fade 最稳。
+                    fadeIn(animationSpec = tween(220)) togetherWith
+                        fadeOut(animationSpec = tween(180))
                 },
                 label = "tabContent"
             ) { tab ->
@@ -4712,11 +4708,9 @@ fun AiModelPage(
                 }
             }
     }
-    val modelScrollState = rememberScrollState()
     Column(
         modifier = modifier
-            .fillMaxWidth()
-            .verticalScroll(modelScrollState),
+            .fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Card(

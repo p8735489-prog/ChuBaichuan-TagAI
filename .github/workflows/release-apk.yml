@@ -74,10 +74,13 @@ jobs:
           if-no-files-found: error
 
       - name: Create GitHub Release and upload APK
-        if: startsWith(github.ref, 'refs/tags/')
+        # 推 v* 标签 -> 正式 Release；推 main -> 持续更新的预发布 Release（dev-latest）
+        # 这样只要推代码到 main，就能在 Releases 页直接下载到最新编译的 APK。
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev-latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Dev Build (最新编译)' }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
           generate_release_notes: true
           files: ${{ steps.apk.outputs.apk_path }}
