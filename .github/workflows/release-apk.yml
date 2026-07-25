@@ -1,0 +1,83 @@
+name: Build & Release APK
+
+# 触发条件：
+#   1. 推送以 v 开头的标签（例如 v1.0.0、v29.7） -> 编译 release APK 并发布到 GitHub Releases
+#   2. 推送到 main 分支 -> 仅编译并上传构件（CI 校验，不发布），方便提前发现编译问题
+#   3. 手动触发（workflow_dispatch） -> 仅编译并上传构件
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# 创建 Release / 上传资源需要写权限
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Build release APK
+        # release 构建类型已绑定项目内的固定签名（app/chubaichuan-fixed-release.keystore，
+        # 密码写在 app/build.gradle.kts），因此 assembleRelease 直接产出已签名 APK，无需额外 Secrets。
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Locate & rename release APK
+        id: apk
+        run: |
+          set -e
+          APK_DIR="app/build/outputs/apk/release"
+          echo "Built APKs:"
+          ls -la "$APK_DIR"
+          SRC_APK="$(ls "$APK_DIR"/*.apk | head -n 1)"
+          if [ -z "$SRC_APK" ]; then
+            echo "::error::No release APK found under $APK_DIR"
+            exit 1
+          fi
+          # 从标签推导版本号（v29.7 -> 29.7），非标签构建用 dev-<short sha>
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+          OUT_APK="$APK_DIR/LocalCueWord-v${VERSION}.apk"
+          cp "$SRC_APK" "$OUT_APK"
+          echo "apk_path=$OUT_APK" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Renamed APK -> $OUT_APK"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalCueWord-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Create GitHub Release and upload APK
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: ${{ steps.apk.outputs.apk_path }}
