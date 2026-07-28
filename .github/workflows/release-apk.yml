@@ -1,0 +1,110 @@
+name: Build & Release APK
+
+# 触发条件：
+#   1. 推送以 v 开头的标签（例如 v1.0.0、v29.7） -> 编译 release APK 并发布到 GitHub Releases
+#   2. 推送到 main 分支 -> 仅编译并上传构件（CI 校验，不发布），方便提前发现编译问题
+#   3. 手动触发（workflow_dispatch） -> 仅编译并上传构件
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# 创建 Release / 上传资源需要写权限
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: wrapper
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Strip proxy settings from gradle.properties
+        # 安全措施：移除 gradle.properties 中的代理设置，避免 CI 环境因找不到本地代理而构建失败
+        run: |
+          if [ -f gradle.properties ]; then
+            sed -i '/^systemProp\.http\.proxy/d; /^systemProp\.https\.proxy/d' gradle.properties
+            echo "gradle.properties after cleanup:"
+            cat gradle.properties
+          fi
+
+      - name: Build release APK
+        # release 构建类型已绑定项目内的固定签名（app/chubaichuan-fixed-release.keystore，
+        # 密码写在 app/build.gradle.kts），因此 assembleRelease 直接产出已签名 APK，无需额外 Secrets。
+        # 若 wrapper 下载失败，自动回退到系统已安装的 gradle。
+        env:
+          GRADLE_OPTS: "-Dhttp.proxyHost= -Dhttps.proxyHost= -Dhttp.proxyPort= -Dhttps.proxyPort="
+        run: |
+          set -e
+          # 尝试用 gradlew 构建（优先使用项目指定版本 8.11.1）
+          if ./gradlew assembleRelease --no-daemon --stacktrace; then
+            echo "Build succeeded with gradlew"
+          else
+            echo "::warning::gradlew failed, falling back to system gradle..."
+            # 回退到系统已安装的 gradle
+            gradle assembleRelease --no-daemon --stacktrace
+          fi
+
+      - name: Locate & rename release APK
+        id: apk
+        run: |
+          set -e
+          APK_DIR="app/build/outputs/apk/release"
+          echo "Built APKs:"
+          ls -la "$APK_DIR"
+          SRC_APK="$(ls "$APK_DIR"/*.apk | head -n 1)"
+          if [ -z "$SRC_APK" ]; then
+            echo "::error::No release APK found under $APK_DIR"
+            exit 1
+          fi
+          # 从标签推导版本号（v29.7 -> 29.7），非标签构建用 dev-<short sha>
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+          OUT_APK="$APK_DIR/LocalCueWord-v${VERSION}.apk"
+          cp "$SRC_APK" "$OUT_APK"
+          echo "apk_path=$OUT_APK" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Renamed APK -> $OUT_APK"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalCueWord-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Create GitHub Release and upload APK
+        # 推 v* 标签 -> 正式 Release；推 main -> 持续更新的预发布 Release（dev-latest）
+        # 这样只要推代码到 main，就能在 Releases 页直接下载到最新编译的 APK。
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev-latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Dev Build (最新编译)' }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          generate_release_notes: true
+          files: ${{ steps.apk.outputs.apk_path }}
