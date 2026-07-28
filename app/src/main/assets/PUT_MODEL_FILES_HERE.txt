@@ -1,0 +1,15 @@
+如果你是通过 GitHub Actions 云端构建（推荐，见根目录 README），
+不需要手动放这两个文件——`.github/workflows/build.yml` 已经配置成在云端
+构建时自动从 Hugging Face 下载 model.onnx 和 selected_tags.csv，你只要推送
+这份代码上去就行，不用管这个目录。
+
+如果你是本地用 Android Studio 构建，才需要手动在这个目录里放：
+
+1. model.onnx
+   一个 WD-tagger 系列的 ONNX 模型，例如 SmilingWolf 在 Hugging Face 上发布的
+   wd-convnext-tagger-v3（Apache-2.0 协议开源）。
+   去 https://huggingface.co/SmilingWolf/wd-convnext-tagger-v3 下载 model.onnx。
+
+2. selected_tags.csv
+   同一个仓库里的 selected_tags.csv，格式是：
+   tag_id,name,category,count
