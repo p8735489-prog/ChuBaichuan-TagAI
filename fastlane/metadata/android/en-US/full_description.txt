@@ -1,0 +1,14 @@
+Local Cue Word is a fully offline AI image tagging tool that runs on your phone.
+
+It uses ONNX models to perform local inference — no internet required, your images never leave your device.
+
+Features:
+- Local AI inference powered by ONNX Runtime
+- Automatic prompt generation organized by quality, subject, appearance, scene, and action
+- Auto-generated negative prompts for Stable Diffusion
+- Model recommendation based on detection results
+- Batch image recognition
+- Tag translation (Chinese ↔ English)
+- Multiple AI model choices
+- Customizable themes with custom background images
+- Tag favorites and history records

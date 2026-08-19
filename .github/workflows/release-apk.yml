@@ -1,0 +1,135 @@
+name: Build & Release APK
+
+# 触发条件：
+#   1. 推送以 v 开头的标签（例如 v1.0.0、v29.7） -> 编译 release APK 并发布到 GitHub Releases
+#   2. 推送到 main 分支 -> 编译并发布到 Release 页面（预发布）
+#   3. 手动触发（workflow_dispatch） -> 仅编译并上传构件
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# 创建 Release / 上传资源需要写权限
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: wrapper
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Strip proxy settings from gradle.properties
+        run: |
+          if [ -f gradle.properties ]; then
+            sed -i '/^systemProp\.http\.proxy/d; /^systemProp\.https\.proxy/d' gradle.properties
+            echo "gradle.properties after cleanup:"
+            cat gradle.properties
+          fi
+
+      - name: Build release APK
+        env:
+          GRADLE_OPTS: "-Dhttp.proxyHost= -Dhttps.proxyHost= -Dhttp.proxyPort= -Dhttps.proxyPort="
+        run: |
+          set -e
+          if ./gradlew assembleRelease --no-daemon --stacktrace; then
+            echo "Build succeeded with gradlew"
+          else
+            echo "::warning::gradlew failed, falling back to system gradle..."
+            gradle assembleRelease --no-daemon --stacktrace
+          fi
+
+      - name: Extract version and locate APK
+        id: apk
+        run: |
+          set -e
+          APK_DIR="app/build/outputs/apk/release"
+          echo "Built APKs:"
+          ls -la "$APK_DIR"
+          SRC_APK="$(ls "$APK_DIR"/*.apk | head -n 1)"
+          if [ -z "$SRC_APK" ]; then
+            echo "::error::No release APK found under $APK_DIR"
+            exit 1
+          fi
+          # 从 build.gradle.kts 提取 versionName
+          VERSION_NAME=$(grep 'versionName' app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')
+          echo "Detected versionName: $VERSION_NAME"
+          # 推标签时用标签名，否则用版本号
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+          else
+            VERSION="${VERSION_NAME}"
+            RELEASE_TAG="v${VERSION_NAME}"
+          fi
+          OUT_APK="$APK_DIR/LocalCueWord-v${VERSION}.apk"
+          cp "$SRC_APK" "$OUT_APK"
+          echo "apk_path=$OUT_APK" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "Renamed APK -> $OUT_APK"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalCueWord-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Create or update GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ steps.apk.outputs.release_tag }}"
+          APK="${{ steps.apk.outputs.apk_path }}"
+          echo "Creating release for tag: $TAG"
+          echo "APK path: $APK"
+
+          # 如果是 main 分支推送，先创建对应的 git tag
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "Pushing tag $TAG..."
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -f "$TAG"
+            git push origin "$TAG" --force
+          fi
+
+          # 删除已有的同名 Release（如果存在）
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+
+          # 创建新的 Release 并上传 APK
+          # 无论 tag 推送还是 main 推送，都发布为正式 Release
+          gh release create "$TAG" "$APK" \
+            --title "$TAG" \
+            --generate-notes \
+            --latest
+
+          echo "Release $TAG created successfully!"
