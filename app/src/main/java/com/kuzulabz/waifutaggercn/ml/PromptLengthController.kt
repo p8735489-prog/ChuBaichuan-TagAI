@@ -6,7 +6,7 @@ package com.kuzulabz.waifutaggercn.ml
  * 根据标签优先级控制最终输出数量，超限时按优先级删除低价值标签。
  *
  * 数量限制：
- *   - 精准模式（PrecisionMode）：最多 50 个标签
+ *   - 精准模式（PrecisionMode）：最多 40 个标签
  *   - 普通模式（NormalMode）：最多 30 个标签
  *
  * 优先保留顺序（高 → 低）：
@@ -26,7 +26,7 @@ package com.kuzulabz.waifutaggercn.ml
  */
 class PromptLengthController(
     /** 精准模式最大标签数 */
-    val precisionModeLimit: Int = 50,
+    val precisionModeLimit: Int = 40,
     /** 普通模式最大标签数 */
     val normalModeLimit: Int = 30
 ) {

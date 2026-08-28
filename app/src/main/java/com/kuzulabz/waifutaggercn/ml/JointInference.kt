@@ -146,8 +146,8 @@ class JointInference(
         onProgress(0.15f, s(R.string.workflow_progress_segment))
         val instances = segEngine.segmentAll(
             bitmap = bitmap,
-            conf = 0.25f,
-            iou = 0.45f,
+            conf = 0.35f,
+            iou = 0.50f,
             maxInstances = 10,
             classFilter = detectedClassIds
         )
@@ -179,7 +179,7 @@ class JointInference(
         crops.forEachIndexed { index, crop ->
             val pct = 0.35f + (0.35f * (index + 1) / crops.size)
             onProgress(pct, s(R.string.workflow_progress_tag_subject, index + 1, crops.size, crop.className))
-            val tags = tagger.tag(crop.bitmap, threshold * 0.80f, generalWeight, characterWeight)
+            val tags = tagger.tag(crop.bitmap, maxOf(threshold * 0.90f, 0.32f), generalWeight, characterWeight)
                 .filterPromptNoiseTags()
             totalTagsBeforeFilter.add(tags.size)
 
@@ -231,7 +231,7 @@ class JointInference(
         // 长度控制：精准模式使用智能 Tag 选择器（最多 50 个标签）
         val limited = tagSelector.select(
             merged,
-            limit = 50,
+            limit = 60,
             config = TagSelector.SelectionConfig()
         )
 

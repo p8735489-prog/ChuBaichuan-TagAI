@@ -512,9 +512,14 @@ fun WaifuTaggerCNTheme(
     // 固定文字颜色：无论动态取色还是静态主题，浅色模式强制黑色文字、深色模式强制白色文字。
     // 解决部分壁纸动态取色导致 onSurface/onSurfaceVariant 过浅、文字不可读的问题。
     val fixedTextScheme = filteredBaseScheme.copy(
+        // 黑色 Monet 预设在浅色模式也必须保持可读：禁止继承白色文字。
         onSurface = if (dark) Color(0xFFF5F5F7) else Color(0xFF1C1C1E),
         onSurfaceVariant = if (dark) Color(0xFFAEAEB2) else Color(0xFF55555C),
-        onBackground = if (dark) Color(0xFFF5F5F7) else Color(0xFF1C1C1E)
+        onBackground = if (dark) Color(0xFFF5F5F7) else Color(0xFF1C1C1E),
+        onPrimary = if (dark) Color.Black else Color.White,
+        onPrimaryContainer = if (dark) Color.White else Color.Black,
+        onSecondary = if (dark) Color.Black else Color.White,
+        onSecondaryContainer = if (dark) Color.White else Color(0xFF1C1C1E)
     )
     
     val colorScheme = if (useCustomBackgroundStyle || useIos27Style || dark || monetPalette == "black") {

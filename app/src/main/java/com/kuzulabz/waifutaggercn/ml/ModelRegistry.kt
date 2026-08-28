@@ -78,6 +78,7 @@ object ModelRegistry {
         add(ModelEntry("wd-eva02-large-tagger-v3", "WD EVA02 Large Tagger v3", ModelCategory.TAGGER, "v3", "~ 1.4GB", 1_500_000_000L, Backend.ONNX, "", null, "wd-eva02-large-tagger-v3", "骁龙 8 Gen3+", 35, 100, "Strongest Danbooru tagger model, large input, requires high performance", "ai_model_desc_wd_eva02_large_v3", 448, true))
         add(ModelEntry("camie-tagger-v2", "Camie Tagger v2", ModelCategory.TAGGER, "v2", "~ 789MB", 789_000_000L, Backend.ONNX, "", null, "camie-tagger-v2", "骁龙 8 Gen2+", 65, 95, "Camie v2 tagger, excels at character and detail recognition, broad tag coverage", "ai_model_desc_camie_v2", 512, true, hfRepo = "Camais03/camie-tagger-v2", onnxFile = "camie-tagger-v2.onnx", tagFile = "camie-tagger-v2-metadata.json", supportedImageTypes = "anime"))
         add(ModelEntry("pixai-tagger-v0.9", "PixAI Tagger v0.9", ModelCategory.TAGGER, "v0.9", "~ 1.27GB", 1_271_000_000L, Backend.ONNX, "", null, "pixai-tagger-v0.9", "骁龙 8 Gen2+", 70, 92, "PixAI v0.9 tagger, optimized for anime illustration tagging, high accuracy on style tags", "ai_model_desc_pixai_v09", 448, true, hfRepo = "deepghs/pixai-tagger-v0.9-onnx", onnxFile = "model.onnx", tagFile = "selected_tags.csv", supportedImageTypes = "anime"))
+        add(ModelEntry("animetimm-resnet34-dbv4", "AnimeTimm DBv4 (ResNet34)", ModelCategory.TAGGER, "DBv4", "~ 111MB", 111_000_000L, Backend.ONNX, "", null, "animetimm-resnet34-dbv4", "骁龙 8 Gen2+", 82, 90, "AnimeTimm Danbooru DBv4 ResNet34 tagger", "ai_model_desc_animetimm_dbv4", 384, true, hfRepo = "Makki2104/animetimm", onnxFile = "resnet34.dbv4-full/model.onnx", tagFile = "resnet34.dbv4-full/selected_tags.csv", supportedImageTypes = "anime"))
         add(ModelEntry("wd-convnext-tagger-v3", "WD ConvNeXt Tagger v3", ModelCategory.TAGGER, "v3", "~ 377MB", 395_000_000L, Backend.ONNX, "", null, "wd-convnext-tagger-v3", "骁龙 8 Gen2+", 78, 88, "Balanced tagger model, good speed and accuracy", "ai_model_desc_wd_convnext_v3", 448, true))
         add(ModelEntry("wd-swinv2-tagger-v3", "WD SwinV2 Tagger v3", ModelCategory.TAGGER, "v3", "~ 342MB", 359_000_000L, Backend.ONNX, "", null, "wd-swinv2-tagger-v3", "骁龙 8 Gen2+", 72, 84, "Swin Transformer, excels at detailed tags", "ai_model_desc_wd_swinv2_v3", 448, true))
         add(ModelEntry("wd-vit-tagger-v3", "WD ViT Tagger v3", ModelCategory.TAGGER, "v3", "~ 327MB", 343_000_000L, Backend.ONNX, "", null, "wd-vit-tagger-v3", "骁龙 8+ Gen1+", 88, 80, "ViT architecture, fastest speed", "ai_model_desc_wd_vit_v3", 448, true))
@@ -185,6 +186,7 @@ object ModelRegistry {
             // Tagger 系列：按家族归类
             id.contains("camie") -> "Camie"
             id.contains("pixai") -> "PixAI"
+            id.contains("animetimm") -> "AnimeTimm"
             // WD v3 系列（EVA02/ConvNeXt/SwinV2/ViT 都统一显示 WD v3）
             id.contains("wd-eva02") ||
             (id.contains("wd") && id.endsWith("-tagger-v3")) -> "WD v3"

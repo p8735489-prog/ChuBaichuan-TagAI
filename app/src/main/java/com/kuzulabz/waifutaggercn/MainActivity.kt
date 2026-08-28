@@ -1,5 +1,8 @@
 package com.kuzulabz.waifutaggercn
 
+import com.kuzulabz.waifutaggercn.auth.HFTokenManager
+import com.kuzulabz.waifutaggercn.auth.HFTokenManagerHolder
+
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -161,6 +164,7 @@ import androidx.compose.material.icons.filled.AccountTree
 import com.kuzulabz.waifutaggercn.ui.components.MorphingBlobLoader
 
 import com.kuzulabz.waifutaggercn.ui.theme.WaifuTaggerCNTheme
+import com.kuzulabz.waifutaggercn.ui.components.DynamicPromptBox
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -596,6 +600,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installCrashLogger(applicationContext)
         super.onCreate(savedInstanceState)
+        // Initialize HuggingFace token manager before model downloads.
+        // Fixes gated HF model downloads that previously had no Bearer header.
+        HFTokenManagerHolder.instance = HFTokenManager(applicationContext)
         runCatching { enableEdgeToEdge() }
         engine = TaggerEngine(applicationContext)
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -3791,7 +3798,8 @@ fun TaggerScreen(
                     promptDraft = autoPromptDraft,
                     isTranslating = isTranslating,
                     onTranslate = openTranslateWithNotice,
-                    onCopyPrompt = { copyTextToClipboard(context, autoPromptDraft.fullPrompt, "auto_prompt") }
+                    onCopyPrompt = { copyTextToClipboard(context, autoPromptDraft.fullPrompt, "auto_prompt") },
+                    onCopyOriginalPrompt = { copyTextToClipboard(context, currentTagText, "original_prompt") }
                 )
             }
 
@@ -4994,7 +5002,8 @@ fun AutoPromptWriterCard(
     promptDraft: AutoPromptDraft,
     isTranslating: Boolean,
     onTranslate: () -> Unit,
-    onCopyPrompt: () -> Unit
+    onCopyPrompt: () -> Unit,
+    onCopyOriginalPrompt: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(22.dp),
@@ -5043,21 +5052,28 @@ fun AutoPromptWriterCard(
                 }
             }
 
-            Text(
-                promptDraft.fullPrompt.ifBlank { stringResource(R.string.auto_prompt_empty) },
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.SansSerif,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-                maxLines = 8,
-                overflow = TextOverflow.Ellipsis
+            DynamicPromptBox(
+                text = promptDraft.fullPrompt.ifBlank { stringResource(R.string.auto_prompt_empty) }
             )
 
-            OutlinedButton(
-                onClick = onCopyPrompt,
-                shape = RoundedCornerShape(16.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(stringResource(R.string.copy_prompt_button), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                OutlinedButton(
+                    modifier = Modifier.weight(1f),
+                    onClick = onCopyPrompt,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text("复制优化 Prompt", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                OutlinedButton(
+                    modifier = Modifier.weight(1f),
+                    onClick = onCopyOriginalPrompt,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text("复制原始 Prompt", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
 
             AutoPromptCategoryRow(stringResource(R.string.auto_prompt_quality), promptDraft.quality)
@@ -10247,6 +10263,10 @@ fun downloadAiModelBundle(
                 if (isCancelled()) throw java.io.IOException("cancelled")
                 downloadUrlToFile(context, "$baseUrl/$tagFileName$downloadParams", tagsTemp!!, model.id, tagFileName, cumulativeProgress, isCancelled)
                 if (isCancelled()) throw java.io.IOException("cancelled")
+
+                // Adapter-owned thresholds/preprocessing are used by TaggerEngine.
+                // Auxiliary JSON/CSV files are optional and must never make an otherwise
+                // valid model bundle fail to install.
             } else {
                 // 检测/分割模型：仅下载 model.onnx
                 // 优先使用模型条目指定的 onnxFile（如 yolov8n-seg.onnx），
@@ -10274,14 +10294,28 @@ fun downloadAiModelBundle(
                 msg.contains("Unable to resolve", ignoreCase = true) ||
                 msg.contains("EOF") ||
                 msg.contains("No route to host", ignoreCase = true) ||
-                msg.contains("HTTP 5", ignoreCase = false)
+                msg.contains("HTTP 5", ignoreCase = false) ||
+                msg.contains("HTTP 401", ignoreCase = false) ||
+                msg.contains("HTTP 403", ignoreCase = false) ||
+                msg.contains("Access denied", ignoreCase = true) ||
+                msg.contains("Gated", ignoreCase = true)
             } ?: false
-            if (currentSource == AI_MODEL_SOURCE_HF_MIRROR && isConnectionError && !isCancelled()) {
-                android.util.Log.w("AiModelDownload", "国内源连接失败，回退到国外源重试: ${e.message}")
-                currentSource = AI_MODEL_SOURCE_HUGGING_FACE
-                // 清理临时文件，从头下载（切换源后 URL 不同，无法断点续传）
+            if (isConnectionError && !isCancelled()) {
+                val fallbackSource = if (currentSource == AI_MODEL_SOURCE_HF_MIRROR)
+                    AI_MODEL_SOURCE_HUGGING_FACE
+                else
+                    AI_MODEL_SOURCE_HF_MIRROR
+
+                android.util.Log.w(
+                    "AiModelDownload",
+                    "下载源 $currentSource 失败，自动切换到 $fallbackSource 重试: ${e.message}"
+                )
+                currentSource = fallbackSource
+                // 不同源可能返回不同 CDN URL，不能安全续传，清理临时分片。
                 modelTemp.delete()
                 tagsTemp?.delete()
+                File(modelTemp.parentFile, "${modelTemp.name}.meta").delete()
+                tagsTemp?.let { File(it.parentFile, "${it.name}.meta").delete() }
                 performDownload(currentSource)
             } else {
                 throw e
@@ -10926,6 +10960,8 @@ private fun openDownloadConnection(url: String, range: String? = null): HttpURLC
         readTimeout = 30_000
         instanceFollowRedirects = false
         setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+        // HuggingFace gated models (AnimeTimm DBv4) require Bearer authentication.
+        HFTokenManagerHolder.instance?.authHeader()?.let { setRequestProperty("Authorization", it) }
         setRequestProperty("Accept", "*/*")
         setRequestProperty("Accept-Encoding", "identity")
         setRequestProperty("Connection", "keep-alive")

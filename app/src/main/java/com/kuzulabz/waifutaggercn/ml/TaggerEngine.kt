@@ -11,6 +11,8 @@ import com.kuzulabz.waifutaggercn.R
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
+import com.kuzulabz.waifutaggercn.ml.adapters.TaggerAdapter
+import com.kuzulabz.waifutaggercn.ml.adapters.TaggerAdapterRegistry
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -63,6 +65,11 @@ class TaggerEngine(private val context: Context) {
     private var inputName: String = "input"
     private var inputLayout: InputLayout = InputLayout.NHWC
     private var preferredPreprocessMode: PreprocessMode? = null
+    private var modelFamily: String = "generic"
+    private var modelAdapter: TaggerAdapter? = null
+    private var modelMean = floatArrayOf(0f, 0f, 0f)
+    private var modelStd = floatArrayOf(1f, 1f, 1f)
+    private var preserveAspect = false
     var inputSize: Int = 448
         private set
     var currentModelName: String = "WD Tagger"
@@ -440,6 +447,30 @@ class TaggerEngine(private val context: Context) {
         inputSize = 448
         inputLayout = InputLayout.NHWC
         preferredPreprocessMode = null
+        modelAdapter = TaggerAdapterRegistry.forModel(modelConfig.id)
+        modelFamily = when {
+            modelAdapter === TaggerAdapterRegistry.camie -> "camie"
+            modelAdapter === TaggerAdapterRegistry.pixai -> "pixai"
+            modelAdapter === TaggerAdapterRegistry.animeTimm -> "animetimm"
+            else -> "generic"
+        }
+        when (modelFamily) {
+            "camie", "animetimm" -> {
+                modelMean = floatArrayOf(0.485f, 0.456f, 0.406f)
+                modelStd = floatArrayOf(0.229f, 0.224f, 0.225f)
+                preserveAspect = true
+            }
+            "pixai" -> {
+                modelMean = floatArrayOf(0.5f, 0.5f, 0.5f)
+                modelStd = floatArrayOf(0.5f, 0.5f, 0.5f)
+                preserveAspect = false
+            }
+            else -> {
+                modelMean = floatArrayOf(0f, 0f, 0f)
+                modelStd = floatArrayOf(1f, 1f, 1f)
+                preserveAspect = false
+            }
+        }
 
         val modelFile = modelConfig.modelFile ?: File(context.filesDir, "model.onnx")
         try {
@@ -558,6 +589,12 @@ class TaggerEngine(private val context: Context) {
         if (names.isEmpty()) {
             return context.getString(R.string.selected_tags_missing)
         }
+        modelAdapter?.labelCount?.let { expected ->
+            if (names.size != expected) {
+                return "模型 ${modelConfig.displayName} 的适配器要求 $expected 个标签，但标签表解析得到 ${names.size} 个。请使用模型仓库提供的同源标签文件。"
+            }
+        }
+
         val outputTagCount = inferOutputTagCount()
         if (outputTagCount > 0 && outputTagCount != names.size) {
             // 标签表比模型输出多：截取前 N 个（常见于通用标签文件被多模型共用）
@@ -597,42 +634,70 @@ class TaggerEngine(private val context: Context) {
     }
 
     private fun preprocess(bitmap: Bitmap, mode: PreprocessMode): PreparedInput {
-        val resized = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
+        val resized: Bitmap = when (modelFamily) {
+            "animetimm" -> {
+                // 官方 preprocess: PadToSize(512,512) -> Resize(384,384) -> CenterCrop(384,384).
+                // 先把图片放到至少 512x512 的中心画布，再统一缩到模型尺寸。
+                val canvasSize = 512
+                val canvasBmp = Bitmap.createBitmap(canvasSize, canvasSize, Bitmap.Config.ARGB_8888)
+                val canvas = android.graphics.Canvas(canvasBmp)
+                canvas.drawColor(android.graphics.Color.WHITE)
+                val scale = minOf(canvasSize.toFloat() / bitmap.width, canvasSize.toFloat() / bitmap.height, 1f)
+                val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
+                val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
+                val scaled = Bitmap.createScaledBitmap(bitmap, w, h, true)
+                canvas.drawBitmap(scaled, (canvasSize - w) / 2f, (canvasSize - h) / 2f, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG))
+                if (scaled !== bitmap) scaled.recycle()
+                Bitmap.createScaledBitmap(canvasBmp, inputSize, inputSize, true).also { canvasBmp.recycle() }
+            }
+            "camie" -> {
+                val scale = minOf(inputSize.toFloat() / bitmap.width, inputSize.toFloat() / bitmap.height)
+                val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
+                val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
+                val scaled = Bitmap.createScaledBitmap(bitmap, w, h, true)
+                Bitmap.createBitmap(inputSize, inputSize, Bitmap.Config.ARGB_8888).also { canvasBmp ->
+                    val canvas = android.graphics.Canvas(canvasBmp)
+                    canvas.drawColor(android.graphics.Color.rgb(124, 116, 104))
+                    canvas.drawBitmap(scaled, (inputSize - w) / 2f, (inputSize - h) / 2f, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG))
+                    if (scaled !== bitmap) scaled.recycle()
+                }
+            }
+            else -> Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
+        }
         val buffer = FloatBuffer.allocate(inputSize * inputSize * 3)
         val pixels = IntArray(inputSize * inputSize)
         resized.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
 
-        val scale = if (mode.scaleToUnit) 1f / 255f else 1f
+        fun norm(v: Int, c: Int): Float {
+            if (modelFamily == "generic") return v * (if (mode.scaleToUnit) 1f / 255f else 1f)
+            val x = v / 255f
+            return (x - modelMean[c]) / modelStd[c]
+        }
         if (mode.layout == InputLayout.NHWC) {
             for (p in pixels) {
-                putPixelChannels(buffer, p, mode.rgb, scale)
+                val r = norm((p shr 16) and 0xFF, 0)
+                val g = norm((p shr 8) and 0xFF, 1)
+                val b = norm(p and 0xFF, 2)
+                if (mode.rgb) { buffer.put(r); buffer.put(g); buffer.put(b) }
+                else { buffer.put(b); buffer.put(g); buffer.put(r) }
             }
         } else {
             val channelValues = Array(3) { FloatArray(inputSize * inputSize) }
             for (i in pixels.indices) {
                 val p = pixels[i]
-                val r = ((p shr 16) and 0xFF) * scale
-                val g = ((p shr 8) and 0xFF) * scale
-                val b = (p and 0xFF) * scale
-                if (mode.rgb) {
-                    channelValues[0][i] = r
-                    channelValues[1][i] = g
-                    channelValues[2][i] = b
-                } else {
-                    channelValues[0][i] = b
-                    channelValues[1][i] = g
-                    channelValues[2][i] = r
-                }
+                val r = norm((p shr 16) and 0xFF, 0)
+                val g = norm((p shr 8) and 0xFF, 1)
+                val b = norm(p and 0xFF, 2)
+                if (mode.rgb) { channelValues[0][i]=r; channelValues[1][i]=g; channelValues[2][i]=b }
+                else { channelValues[0][i]=b; channelValues[1][i]=g; channelValues[2][i]=r }
             }
-            channelValues.forEach { values ->
-                values.forEach { buffer.put(it) }
-            }
+            channelValues.forEach { it.forEach(buffer::put) }
         }
         buffer.rewind()
-        val shape = when (mode.layout) {
-            InputLayout.NHWC -> longArrayOf(1, inputSize.toLong(), inputSize.toLong(), 3)
-            InputLayout.NCHW -> longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
-        }
+        val shape = if (mode.layout == InputLayout.NHWC)
+            longArrayOf(1, inputSize.toLong(), inputSize.toLong(), 3)
+        else longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
+        if (resized !== bitmap) resized.recycle()
         return PreparedInput(buffer, shape)
     }
 
@@ -720,32 +785,35 @@ class TaggerEngine(private val context: Context) {
     }
 
     private fun compatiblePreprocessModes(): List<PreprocessMode> {
+        if (modelFamily != "generic") {
+            // 专用模型禁止“猜测式”预处理；输入布局由 ONNX shape 确定。
+            return listOf(PreprocessMode(inputLayout, rgb = true, scaleToUnit = true))
+        }
         val base = listOf(
             PreprocessMode(inputLayout, rgb = false, scaleToUnit = false),
             PreprocessMode(inputLayout, rgb = true, scaleToUnit = false),
             PreprocessMode(inputLayout, rgb = false, scaleToUnit = true),
-            PreprocessMode(inputLayout, rgb = true, scaleToUnit = true),
-            PreprocessMode(if (inputLayout == InputLayout.NHWC) InputLayout.NCHW else InputLayout.NHWC, rgb = false, scaleToUnit = false),
-            PreprocessMode(if (inputLayout == InputLayout.NHWC) InputLayout.NCHW else InputLayout.NHWC, rgb = true, scaleToUnit = false),
-            PreprocessMode(if (inputLayout == InputLayout.NHWC) InputLayout.NCHW else InputLayout.NHWC, rgb = false, scaleToUnit = true),
-            PreprocessMode(if (inputLayout == InputLayout.NHWC) InputLayout.NCHW else InputLayout.NHWC, rgb = true, scaleToUnit = true)
+            PreprocessMode(inputLayout, rgb = true, scaleToUnit = true)
         )
         return (listOfNotNull(preferredPreprocessMode) + base).distinct()
     }
 
     private fun extractBestScores(results: OrtSession.Result): FloatArray {
-        val candidates = mutableListOf<FloatArray>()
+        val candidates = mutableListOf<Pair<String, FloatArray>>()
         val iterator = results.iterator()
         while (iterator.hasNext()) {
-            val output = iterator.next().value.value
+            val entry = iterator.next()
             val values = mutableListOf<Float>()
-            flattenOutputValues(output, values)
-            if (values.isNotEmpty()) candidates.add(values.toFloatArray())
+            flattenOutputValues(entry.value.value, values)
+            if (values.isNotEmpty()) candidates += entry.key to values.toFloatArray()
         }
         if (candidates.isEmpty()) return FloatArray(0)
-        return candidates.maxByOrNull { scores ->
-            if (tagNames.isEmpty()) scores.size else minOf(scores.size, tagNames.size)
-        } ?: FloatArray(0)
+        // Give the registered adapter first choice. This prevents model-specific
+        // output semantics from being silently treated as generic WD outputs.
+        modelAdapter?.selectOutput(candidates, tagNames.size)?.let { return it }
+
+        return candidates.firstOrNull { it.second.size == tagNames.size }?.second
+            ?: candidates.maxByOrNull { it.second.size }!!.second
     }
 
     private fun flattenOutputValues(value: Any?, out: MutableList<Float>) {
@@ -776,7 +844,8 @@ class TaggerEngine(private val context: Context) {
             if (name.isEmpty() || name.startsWith("__unused_") || name.startsWith("__dup_header_")) continue
             val category = tagCategories.getOrElse(i) { 0 }
             val adjustedScore = rawScore * weightForCategory(category, generalWeight, characterWeight)
-            if (fallbackTopTags || adjustedScore >= threshold) {
+            val effectiveThreshold = modelAdapter?.threshold(category, threshold) ?: threshold
+            if (fallbackTopTags || adjustedScore >= effectiveThreshold) {
                 val key = normalizeTagName(name)
                 val candidate = Tag(name, category, adjustedScore, rawScore)
                 val existing = bestByName[key]
@@ -788,7 +857,9 @@ class TaggerEngine(private val context: Context) {
         val sorted = bestByName.values.sortedWith(
             compareByDescending<Tag> { it.score }.thenBy { it.name.lowercase() }
         )
-        return if (fallbackTopTags) sorted.take(20) else sorted
+        // 防止多模型融合污染 prompt：单模型最终输出也必须受最大标签限制。
+        // fallback 保持较小候选集，正常模式限制为 80 个高置信标签。
+        return if (fallbackTopTags) sorted.take(20) else sorted.take(80)
     }
 
     private fun normalizeOutputScores(scores: FloatArray): FloatArray {
@@ -796,14 +867,11 @@ class TaggerEngine(private val context: Context) {
         if (finite.isEmpty()) return scores
         val minScore = finite.minOrNull() ?: 0f
         val maxScore = finite.maxOrNull() ?: 0f
+        val mustSigmoid = modelFamily == "camie" || modelFamily == "animetimm"
         val looksLikeLogits = minScore < 0f || maxScore > 1.5f
-        return if (looksLikeLogits) {
-            FloatArray(scores.size) { index ->
-                sigmoid(scores[index])
-            }
-        } else {
-            scores
-        }
+        return if (mustSigmoid || looksLikeLogits) {
+            FloatArray(scores.size) { index -> sigmoid(scores[index]) }
+        } else scores
     }
 
     private fun sigmoid(value: Float): Float {

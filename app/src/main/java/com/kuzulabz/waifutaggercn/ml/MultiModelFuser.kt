@@ -150,7 +150,21 @@ class MultiModelFuser {
 
     /** 标签名归一化 */
     private fun normalizeTagName(name: String): String {
-        return name.trim().lowercase().replace(" ", "_").replace("(", "").replace(")", "")
+        return when (name.trim().lowercase()
+            .replace(" ", "_")
+            .replace("(", "")
+            .replace(")", "")) {
+            "blue_hair_style", "hair_blue" -> "blue_hair"
+            "blackhair" -> "black_hair"
+            "whitehair" -> "white_hair"
+            "1girl", "female_character", "girl" -> "1girl"
+            "solo_character" -> "solo"
+            "high_quality", "masterpiece" -> "masterpiece"
+            else -> name.trim().lowercase()
+                .replace(" ", "_")
+                .replace("(", "")
+                .replace(")", "")
+        }
     }
 
     /** 跨模型冲突解决 */
