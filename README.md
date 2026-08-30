@@ -11,11 +11,13 @@
 <p align="center">
   <img alt="Android" src="https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white" />
   <img alt="Local AI" src="https://img.shields.io/badge/Local_AI-ONNX-005CED?style=for-the-badge&logo=onnx&logoColor=white" />
-  <img alt="Version" src="https://img.shields.io/badge/Version-3.6.1-FF6B35?style=for-the-badge" />
+  <img alt="Version" src="https://img.shields.io/badge/Version-3.6.3-FF6B35?style=for-the-badge" />
   <img alt="License" src="https://img.shields.io/badge/License-Apache%202.0-D22128?style=for-the-badge" />
 </p>
 
 <p align="center">
+  <a href="https://haobai.us.ci/">Official Website</a>
+  ·
   <a href="https://github.com/p8735489-prog/ChuBaichuan-TagAI/releases/latest">Download Latest APK</a>
   ·
   <a href="https://qm.qq.com/q/6jViPcR9le">QQ Group</a>
@@ -39,6 +41,26 @@ The app focuses on "select an image, get usable prompts fast." Think of it as a 
 
 ---
 
+## Official Website
+
+**Local Cue Word official website:** https://haobai.us.ci/
+
+The website provides project information and the latest project resources. The Android app also includes a direct **Website** shortcut in the footer.
+
+---
+
+## Design & UX
+
+The app uses a rounded, motion-focused Material 3 interface with lightweight decorative shapes and smooth transitions.
+
+- **One main copy action:** the recognition page keeps a single **Copy Tag** button.
+- **Logical copy pipeline:** copied content comes from the final filtered tag list, rather than raw model output or generated prompt text.
+- **Three-stage first launch:** welcome → privacy → language, presented as one continuous onboarding experience instead of three separate popups.
+- **Four equal footer actions:** community → source code → sponsor → official website.
+- **Large-radius surfaces:** rounded cards and controls are used consistently to keep the interface visually soft and easy to scan.
+
+---
+
 ## Features
 
 | Feature | Description |
@@ -55,6 +77,9 @@ The app focuses on "select an image, get usable prompts fast." Think of it as a 
 | Favorites | Bookmark frequently used tags to build character, style, and composition libraries |
 | Batch Recognition | Select multiple images at once for continuous tag generation |
 | Custom Appearance | Dark mode, dynamic color, custom background image, dimming, and theme colors |
+| Logical Tag Copy | One dedicated “Copy Tag” action copies the final filtered tag set after noise filtering and tag-limit rules |
+| First-Run Onboarding | A single three-stage onboarding flow for welcome, privacy consent, and language selection, with smooth page transitions |
+| Footer Shortcuts | Four evenly sized shortcuts for community, source code, sponsor, and the official website |
 | Share | Share prompts, source link, QQ group, and Telegram group |
 
 ---
@@ -65,7 +90,7 @@ The app focuses on "select an image, get usable prompts fast." Think of it as a 
 2. Open the app and download recognition models from the Model Manager (first use requires internet; after that, fully offline).
 3. Select an image and tap Recognize.
 4. Wait for the local model to generate tags and auto-organize them into a prompt.
-5. Copy, translate, bookmark, save, or share as needed.
+5. Use **Copy Tag** to copy the final logical tag set, then translate, bookmark, save, or share as needed.
 
 ---
 
@@ -124,6 +149,15 @@ All models run locally on the device. No internet connection required after down
 ---
 
 ## Changelog
+
+### v3.6.3
+
+- 优化复制功能：主识别页仅保留「复制Tag」。
+- 关闭原生的多余复制入口，复制内容统一走最终 Tag 逻辑。
+- 重构首次启动引导为连续三阶段界面。
+- 优化大圆角视觉、页面过渡与丝滑动画。
+- 底部快捷入口调整为 4 个，并新增「官网」按钮。
+- 官网：https://haobai.us.ci/
 
 ### v3.6
 
@@ -231,3 +265,14 @@ If this project helps you, consider sponsoring the developer:
 ## License
 
 This project is open source and available for learning and communication.
+
+
+---
+
+## Official Website
+
+[https://haobai.us.ci/](https://haobai.us.ci/)
+
+<p align="center">
+  <a href="https://haobai.us.ci/">Local Cue Word Official Website</a>
+</p>

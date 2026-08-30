@@ -18,6 +18,10 @@
     <string name="pick_image">选择图片</string>
     <string name="run_tagging">开始识别</string>
     <string name="copy_tags">复制标签</string>
+    <string name="copy_tag">复制Tag</string>
+    <string name="footer_website">官网</string>
+    <string name="onboarding_next">下一步</string>
+    <string name="onboarding_done">进入应用</string>
     <string name="share_tags">分享标签</string>
     <string name="special_link_share_text">Local Cue Word Tag 特殊链接：%1$s</string>
     <string name="special_link_loaded">已解析特殊链接并载入 Tag</string>

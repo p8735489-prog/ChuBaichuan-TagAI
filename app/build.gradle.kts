@@ -12,8 +12,8 @@ android {
         applicationId = "com.kuzulabz.waifutaggercn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 30601000
-        versionName = "3.6.2"
+        versionCode = 30603000
+        versionName = "3.6.3"
     }
 
     signingConfigs {

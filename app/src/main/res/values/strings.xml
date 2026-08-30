@@ -19,6 +19,10 @@
     <string name="pick_image">Pick Image</string>
     <string name="run_tagging">Run Tagging</string>
     <string name="copy_tags">Copy Tags</string>
+    <string name="copy_tag">Copy Tag</string>
+    <string name="footer_website">Website</string>
+    <string name="onboarding_next">Continue</string>
+    <string name="onboarding_done">Enter Local Cue Word</string>
     <string name="share_tags">Share Tags</string>
     <string name="special_link_share_text">Local Cue Word special tag link: %1$s</string>
     <string name="special_link_loaded">Special link parsed and tags loaded</string>
