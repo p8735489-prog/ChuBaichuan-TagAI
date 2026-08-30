@@ -43,9 +43,6 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.expandVertically
@@ -293,7 +290,6 @@ private const val BASE_EXP_GAIN = 100
 private const val MIN_RELIABLE_COLOR_BODY_PART_SCORE = 0.75f
 private const val AI_MODEL_NAME = "WD14 v3"
 private const val PROJECT_URL = "https://github.com/p8735489-prog/ChuBaichuan-TagAI"
-private const val WEBSITE_URL = "https://haobai.us.ci/"
 private const val QQ_GROUP_URL = "https://qm.qq.com/q/6jViPcR9le"
 private const val TELEGRAM_URL = "https://t.me/Local_Cue_Word"
 private const val SPONSOR_URL = "https://www.ifdian.net/a/cubaicuan"
@@ -663,19 +659,9 @@ class MainActivity : ComponentActivity() {
             var heroPoetryNoticeShown by remember { mutableStateOf(prefs.getBoolean(KEY_HERO_POETRY_NOTICE_SHOWN, false)) }
             var heroPoetryRejected by remember { mutableStateOf(prefs.getBoolean(KEY_HERO_POETRY_REJECTED, false)) }
             var languageOption by remember { mutableStateOf(normalizeLanguageOption(prefs.getString(KEY_LANGUAGE, "system") ?: "system")) }
-            // 首次进入统一使用一个三阶段 onboarding，取代旧的三个独立弹窗。
-            var onboardingPage by remember { mutableIntStateOf(0) }
-            var showFirstRunOnboarding by remember {
-                mutableStateOf(
-                    !(prefs.getBoolean(KEY_INTRO_SHOWN, false) &&
-                        prefs.getBoolean(KEY_LANGUAGE_SELECTED, false) &&
-                        prefs.getBoolean(KEY_PRIVACY_AGREED, false))
-                )
-            }
-            // 兼容旧设置状态：这些变量仍保留给设置页/旧数据，但不再作为首次进入弹窗链。
-            var showIntroDialog by remember { mutableStateOf(false) }
-            var showLanguageSelectDialog by remember { mutableStateOf(false) }
-            var showPrivacyDialog by remember { mutableStateOf(false) }
+            var showIntroDialog by remember { mutableStateOf(!prefs.getBoolean(KEY_INTRO_SHOWN, false)) }
+            var showLanguageSelectDialog by remember { mutableStateOf(!prefs.getBoolean(KEY_LANGUAGE_SELECTED, false)) }
+            var showPrivacyDialog by remember { mutableStateOf(!prefs.getBoolean(KEY_PRIVACY_AGREED, false) && prefs.getBoolean(KEY_INTRO_SHOWN, false) && prefs.getBoolean(KEY_LANGUAGE_SELECTED, false)) }
             var generalTagWeight by remember { mutableStateOf(prefs.getFloat(KEY_GENERAL_TAG_WEIGHT, 1f)) }
             var characterTagWeight by remember { mutableStateOf(prefs.getFloat(KEY_CHARACTER_TAG_WEIGHT, 1f)) }
             var promptTagLimit by remember {
@@ -2232,29 +2218,41 @@ fun TaggerScreen(
         )
     }
 
-    if (showFirstRunOnboarding) {
-        FirstRunOnboarding(
-            page = onboardingPage,
+    if (showLanguageSelectDialog) {
+        LanguageSelectDialog(
             currentLanguage = languageOption,
-            onPageChange = { onboardingPage = it.coerceIn(0, 2) },
             onLanguageSelected = { selectedLang ->
-                languageOption = normalizeLanguageOption(selectedLang)
-                prefs.edit().putString(KEY_LANGUAGE, languageOption).apply()
-            },
-            onComplete = {
-                prefs.edit()
-                    .putBoolean(KEY_LANGUAGE_SELECTED, true)
-                    .putBoolean(KEY_PRIVACY_AGREED, true)
-                    .putBoolean(KEY_INTRO_SHOWN, true)
-                    .apply()
-                showFirstRunOnboarding = false
-                applyAppLocale(this@MainActivity, languageOption)
-                recreate()
-            },
-            onPrivacyDecline = { finishAffinity() }
+                val normalized = normalizeLanguageOption(selectedLang)
+                if (normalized != languageOption) {
+                    onLanguageChange(normalized)
+                } else {
+                    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                        .putBoolean(KEY_LANGUAGE_SELECTED, true).apply()
+                    onShowLanguageSelectDialogChange(false)
+                    // 语言选择完成后，先显示隐私声明（如果未同意）
+                    if (!context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .getBoolean(KEY_PRIVACY_AGREED, false)) {
+                        onShowPrivacyDialog()
+                    } else if (!context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .getBoolean(KEY_INTRO_SHOWN, false)) {
+                        // 隐私已同意但未看过欢迎弹窗，显示欢迎弹窗
+                        onShowIntroDialog()
+                    }
+                }
+            }
         )
     }
 
+    if (showIntroDialog) {
+        IntroDialog(onDismiss = onIntroDismiss)
+    }
+
+    if (showPrivacyDialog) {
+        PrivacyDialog(
+            onAgree = onPrivacyAgree,
+            onDisagree = onPrivacyDisagree
+        )
+    }
 
     if (showExperienceIntroDialog) {
         ExperienceIntroDialog(onDismiss = onExperienceIntroDismiss)
@@ -2813,6 +2811,43 @@ fun TaggerScreen(
     Scaffold(
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
+        floatingActionButton = {
+            // 一键复制提示词 — dedicated one-tap "copy as prompt" action,
+            // always reachable without scrolling to the button row below.
+            if (selectedMainTab == 0 && tags.isNotEmpty()) {
+                ExtendedFloatingActionButton(
+                    text = {
+                        Text(
+                            text = stringResource(R.string.copy_prompt),
+                            style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    icon = {
+                        Icon(
+                            Icons.Filled.AutoAwesome,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    },
+                    shape = RoundedCornerShape(18.dp),
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    elevation = FloatingActionButtonDefaults.elevation(
+                        defaultElevation = 5.dp,
+                        pressedElevation = 4.dp,
+                        focusedElevation = 5.dp,
+                        hoveredElevation = 6.dp
+                    ),
+                    modifier = Modifier
+                        .height(48.dp)
+                        .navigationBarsPadding()
+                        .padding(bottom = 56.dp),
+                    onClick = { copyTextToClipboard(context, autoPromptDraft.fullPrompt, "auto_prompt") }
+                )
+            }
+        },
         bottomBar = {
             IosMorphingSegmentedControl(
                 options = listOf(
@@ -3762,7 +3797,9 @@ fun TaggerScreen(
                 AutoPromptWriterCard(
                     promptDraft = autoPromptDraft,
                     isTranslating = isTranslating,
-                    onTranslate = openTranslateWithNotice
+                    onTranslate = openTranslateWithNotice,
+                    onCopyPrompt = { copyTextToClipboard(context, autoPromptDraft.fullPrompt, "auto_prompt") },
+                    onCopyOriginalPrompt = { copyTextToClipboard(context, currentTagText, "original_prompt") }
                 )
             }
 
@@ -3772,7 +3809,8 @@ fun TaggerScreen(
                 exit = fadeOut(tween(100))
             ) {
                 NegativePromptCard(
-                    negativePrompt = negativePrompt
+                    negativePrompt = negativePrompt,
+                    onCopy = { copyTextToClipboard(context, negativePrompt, "negative_prompt") }
                 )
             }
 
@@ -3798,11 +3836,11 @@ fun TaggerScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(48.dp),
-                            onClick = { copyLogicalTagsToClipboard(context, limitedTags) }
+                            onClick = { copyTagsToClipboard(context, limitedTags) }
                         ) {
                             Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text(stringResource(R.string.copy_tag), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(stringResource(R.string.copy_tags), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         OutlinedButton(
                             shape = RoundedCornerShape(20.dp),
@@ -4218,8 +4256,7 @@ fun TaggerScreen(
                 } // Column
             } // AnimatedContent
 
-            // 底部统一为四个等宽入口：交流群 / 源代码 / 赞助 / 官网。
-            // 官网直接打开 haobai.us.ci，保持入口轻量且不额外弹窗。
+            // 模型页、设置页不显示底部图标（交流群 / 源代码 / 赞助）
             if (selectedMainTab !in setOf(2, 3)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -4244,14 +4281,6 @@ fun TaggerScreen(
                         label = stringResource(R.string.footer_sponsor),
                         modifier = Modifier.weight(1f),
                         onClick = { showSponsorDialog = true }
-                    )
-                    FooterLinkButton(
-                        icon = Icons.Filled.Language,
-                        label = stringResource(R.string.footer_website),
-                        modifier = Modifier.weight(1f),
-                        onClick = {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(WEBSITE_URL)))
-                        }
                     )
                 }
             }
@@ -4972,7 +5001,9 @@ private fun PixelSegmentedProgressBar(
 fun AutoPromptWriterCard(
     promptDraft: AutoPromptDraft,
     isTranslating: Boolean,
-    onTranslate: () -> Unit
+    onTranslate: () -> Unit,
+    onCopyPrompt: () -> Unit,
+    onCopyOriginalPrompt: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(22.dp),
@@ -5024,6 +5055,26 @@ fun AutoPromptWriterCard(
             DynamicPromptBox(
                 text = promptDraft.fullPrompt.ifBlank { stringResource(R.string.auto_prompt_empty) }
             )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    modifier = Modifier.weight(1f),
+                    onClick = onCopyPrompt,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text("复制优化 Prompt", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                OutlinedButton(
+                    modifier = Modifier.weight(1f),
+                    onClick = onCopyOriginalPrompt,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text("复制原始 Prompt", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
 
             AutoPromptCategoryRow(stringResource(R.string.auto_prompt_quality), promptDraft.quality)
             AutoPromptCategoryRow(stringResource(R.string.auto_prompt_subject), promptDraft.subject)
@@ -5082,7 +5133,8 @@ private fun AutoPromptCategoryRow(
 
 @Composable
 fun NegativePromptCard(
-    negativePrompt: String
+    negativePrompt: String,
+    onCopy: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(20.dp),
@@ -5106,6 +5158,12 @@ fun NegativePromptCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp
             )
+            OutlinedButton(
+                onClick = onCopy,
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Text(stringResource(R.string.copy_negative_prompt))
+            }
         }
     }
 }
@@ -7034,333 +7092,6 @@ fun AiModelDialog(
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.settings_close)) }
         }
     )
-}
-
-
-@Composable
-private fun FirstRunOnboarding(
-    page: Int,
-    currentLanguage: String,
-    onPageChange: (Int) -> Unit,
-    onLanguageSelected: (String) -> Unit,
-    onComplete: () -> Unit,
-    onPrivacyDecline: () -> Unit
-) {
-    val context = LocalContext.current
-    var privacyChecked by remember { mutableStateOf(false) }
-    val pageProgress by animateFloatAsState(
-        targetValue = (page + 1) / 3f,
-        animationSpec = tween(420, easing = FastOutSlowInEasing),
-        label = "onboardingProgress"
-    )
-    val floatTransition = rememberInfiniteTransition(label = "onboardingDecor")
-    val decorOffset by floatTransition.animateFloat(
-        initialValue = -10f,
-        targetValue = 10f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "decorOffset"
-    )
-
-    BackHandler(enabled = page > 0) {
-        onPageChange(page - 1)
-    }
-
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            // 大圆角装饰块：只提供层次，不复刻参考图布局。
-            Box(
-                modifier = Modifier
-                    .offset(x = (-72).dp, y = (38 + decorOffset / 2).dp)
-                    .size(220.dp)
-                    .clip(RoundedCornerShape(88.dp))
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
-            )
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset(x = 86.dp, y = (150 - decorOffset).dp)
-                    .size(250.dp)
-                    .clip(RoundedCornerShape(100.dp))
-                    .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f))
-            )
-
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .systemBarsPadding()
-                    .padding(horizontal = 24.dp, vertical = 18.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Local Cue Word",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        text = "${page + 1} / 3",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Spacer(Modifier.height(14.dp))
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(99.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(pageProgress)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(99.dp))
-                            .background(MaterialTheme.colorScheme.primary)
-                    )
-                }
-
-                Spacer(Modifier.height(18.dp))
-
-                AnimatedContent(
-                    targetState = page,
-                    transitionSpec = {
-                        (slideInVertically(
-                            animationSpec = tween(380, easing = FastOutSlowInEasing),
-                            initialOffsetY = { if (targetState > initialState) it / 6 else -it / 6 }
-                        ) + fadeIn(tween(280))) togetherWith
-                            (slideOutVertically(
-                                animationSpec = tween(280, easing = FastOutSlowInEasing),
-                                targetOffsetY = { if (targetState > initialState) -it / 8 else it / 8 }
-                            ) + fadeOut(tween(180)))
-                    },
-                    label = "onboardingPage"
-                ) { currentPage ->
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        val icon = when (currentPage) {
-                            0 -> Icons.Filled.AutoAwesome
-                            1 -> Icons.Filled.Lock
-                            else -> Icons.Filled.Language
-                        }
-                        Box(
-                            modifier = Modifier
-                                .size(78.dp)
-                                .clip(RoundedCornerShape(30.dp))
-                                .background(MaterialTheme.colorScheme.primaryContainer),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = icon,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(38.dp)
-                            )
-                        }
-
-                        Spacer(Modifier.height(26.dp))
-
-                        Text(
-                            text = when (currentPage) {
-                                0 -> stringResource(R.string.welcome_dialog_title)
-                                1 -> stringResource(R.string.privacy_dialog_title)
-                                else -> stringResource(R.string.language_select_title)
-                            },
-                            style = MaterialTheme.typography.displaySmall,
-                            fontWeight = FontWeight.ExtraBold,
-                            lineHeight = 42.sp
-                        )
-
-                        Spacer(Modifier.height(12.dp))
-
-                        Text(
-                            text = when (currentPage) {
-                                0 -> stringResource(R.string.welcome_dialog_message)
-                                1 -> stringResource(R.string.privacy_dialog_message)
-                                else -> stringResource(R.string.language_select_message)
-                            },
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            lineHeight = 25.sp
-                        )
-
-                        if (currentPage == 0) {
-                            Spacer(Modifier.height(22.dp))
-                            Surface(
-                                shape = RoundedCornerShape(30.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(22.dp),
-                                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Text(
-                                        "本地优先 · 模型可控 · 标签可管理",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        "模型加载完成后即可开始识别。首次设置完成后，这个页面不会再次打扰你。",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-
-                        if (currentPage == 1) {
-                            Spacer(Modifier.height(22.dp))
-                            Surface(
-                                onClick = { privacyChecked = !privacyChecked },
-                                shape = RoundedCornerShape(26.dp),
-                                color = if (privacyChecked)
-                                    MaterialTheme.colorScheme.primaryContainer
-                                else
-                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Checkbox(
-                                        checked = privacyChecked,
-                                        onCheckedChange = { privacyChecked = it }
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        "我已阅读并同意隐私说明",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                            }
-                        }
-
-                        if (currentPage == 2) {
-                            Spacer(Modifier.height(22.dp))
-                            val languages = listOf(
-                                "system" to stringResource(R.string.settings_language_system),
-                                "zh" to stringResource(R.string.settings_language_zh),
-                                "zh-rTW" to stringResource(R.string.settings_language_zh_rTW),
-                                "en" to stringResource(R.string.settings_language_en),
-                                "ja" to stringResource(R.string.settings_language_ja),
-                                "ko" to stringResource(R.string.settings_language_ko),
-                                "ru" to stringResource(R.string.settings_language_ru)
-                            )
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                languages.chunked(2).forEach { row ->
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                    ) {
-                                        row.forEach { (code, label) ->
-                                            val selected = code == currentLanguage
-                                            Surface(
-                                                onClick = { onLanguageSelected(code) },
-                                                shape = RoundedCornerShape(22.dp),
-                                                color = if (selected)
-                                                    MaterialTheme.colorScheme.primary
-                                                else
-                                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
-                                                modifier = Modifier.weight(1f)
-                                            ) {
-                                                Text(
-                                                    text = label,
-                                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                                                    textAlign = TextAlign.Center,
-                                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                                    color = if (selected)
-                                                        MaterialTheme.colorScheme.onPrimary
-                                                    else
-                                                        MaterialTheme.colorScheme.onSurface
-                                                )
-                                            }
-                                        }
-                                        if (row.size == 1) Spacer(Modifier.weight(1f))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(16.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    if (page > 0) {
-                        OutlinedButton(
-                            onClick = { onPageChange(page - 1) },
-                            shape = RoundedCornerShape(24.dp),
-                            modifier = Modifier
-                                .weight(0.32f)
-                                .height(56.dp)
-                        ) {
-                            Icon(Icons.Filled.ArrowBack, contentDescription = null)
-                        }
-                    }
-
-                    Button(
-                        onClick = {
-                            when (page) {
-                                0 -> onPageChange(1)
-                                1 -> if (privacyChecked) onPageChange(2)
-                                2 -> onComplete()
-                            }
-                        },
-                        enabled = page != 1 || privacyChecked,
-                        shape = RoundedCornerShape(24.dp),
-                        modifier = Modifier
-                            .weight(if (page > 0) 0.68f else 1f)
-                            .height(56.dp)
-                    ) {
-                        Text(
-                            text = when (page) {
-                                0 -> stringResource(R.string.onboarding_next)
-                                1 -> stringResource(R.string.onboarding_next)
-                                else -> stringResource(R.string.onboarding_done)
-                            },
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Icon(Icons.Filled.KeyboardArrowRight, contentDescription = null)
-                    }
-                }
-
-                if (page == 1) {
-                    TextButton(
-                        onClick = onPrivacyDecline,
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                    ) {
-                        Text(stringResource(R.string.privacy_dialog_disagree))
-                    }
-                }
-
-                Spacer(Modifier.height(2.dp))
-            }
-        }
-    }
 }
 
 @Composable
@@ -11836,18 +11567,10 @@ fun formatRecordShortTime(createdAt: Long): String {
     return SimpleDateFormat("MM/dd HH:mm", Locale.US).format(Date(createdAt))
 }
 
-/**
- * 逻辑复制：只复制经过当前 TagFilter / Prompt 上限处理后的最终标签，
- * 不复制原始模型输出，也不复制自动 Prompt / Negative Prompt。
- */
-fun copyLogicalTagsToClipboard(context: Context, tags: List<TaggerEngine.Tag>) {
-    val logicalTags = tags
-        .filterPromptNoiseTags()
-        .distinctBy { it.name.trim().lowercase(Locale.ROOT) }
-    if (logicalTags.isEmpty()) return
-    copyTextToClipboard(context, logicalTags.toTagText(), "logical_tags")
+fun copyTagsToClipboard(context: Context, tags: List<TaggerEngine.Tag>) {
+    if (tags.isEmpty()) return
+    copyTextToClipboard(context, tags.toTagText(), "tags")
 }
-
 
 fun copyTextToClipboard(context: Context, text: String, label: String = "tags") {
     if (text.isBlank()) return

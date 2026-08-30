@@ -24,6 +24,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -53,17 +56,18 @@ jobs:
             cat gradle.properties
           fi
 
+      - name: CI preflight
+        run: |
+          chmod +x ./tools/ci-preflight.sh
+          ./tools/ci-preflight.sh
+
       - name: Build release APK
         env:
           GRADLE_OPTS: "-Dhttp.proxyHost= -Dhttps.proxyHost= -Dhttp.proxyPort= -Dhttps.proxyPort="
         run: |
-          set -e
-          if ./gradlew assembleRelease --no-daemon --stacktrace; then
-            echo "Build succeeded with gradlew"
-          else
-            echo "::warning::gradlew failed, falling back to system gradle..."
-            gradle assembleRelease --no-daemon --stacktrace
-          fi
+          set -euo pipefail
+          echo "Commit: $(git rev-parse HEAD)"
+          ./gradlew clean assembleRelease --no-daemon --stacktrace
 
       - name: Extract version and locate APK
         id: apk
