@@ -3802,66 +3802,6 @@ fun TaggerScreen(
                 enter = fadeIn(tween(200)),
                 exit = fadeOut(tween(100))
             ) {
-                NegativePromptCard(
-                    negativePrompt = negativePrompt
-                )
-            }
-
-            AnimatedVisibility(
-                visible = tags.isNotEmpty(),
-                enter = fadeIn(tween(200)),
-                exit = fadeOut(tween(100))
-            ) {
-                ModelRecommendationCard(
-                    detectionResult = detectionResult,
-                    recommendedModels = recommendedModels
-                )
-            }
-
-            AnimatedVisibility(visible = tags.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Button(
-                            shape = RoundedCornerShape(22.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(52.dp),
-                            onClick = { copyTagsToClipboard(context, limitedTags) }
-                        ) {
-                            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(19.dp))
-                            Spacer(Modifier.width(7.dp))
-                            Text(stringResource(R.string.copy_tags), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        OutlinedButton(
-                            shape = RoundedCornerShape(22.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(52.dp),
-                            onClick = { shareTags(context, limitedTags) }
-                        ) {
-                            Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(19.dp))
-                            Spacer(Modifier.width(7.dp))
-                            Text(stringResource(R.string.share_tags), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
-                }
-            }
-
-            AnimatedVisibility(visible = tags.isEmpty() && !isRunning && bitmap != null) {
-                Text(
-                    stringResource(R.string.no_tags),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            AnimatedVisibility(
-                visible = tags.isNotEmpty(),
-                enter = fadeIn(tween(200)),
-                exit = fadeOut(tween(100))
-            ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth(),
@@ -3911,6 +3851,75 @@ fun TaggerScreen(
                     }
                 }
             }
+            }
+
+            // 主结果操作：紧跟标签列表，避免按钮与反向词/模型推荐卡片之间产生过大的视觉断层。
+            AnimatedVisibility(visible = tags.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        contentPadding = PaddingValues(horizontal = 12.dp),
+                        onClick = { copyTagsToClipboard(context, limitedTags) }
+                    ) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            stringResource(R.string.copy_tags),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    OutlinedButton(
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        contentPadding = PaddingValues(horizontal = 12.dp),
+                        onClick = { shareTags(context, limitedTags) }
+                    ) {
+                        Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            stringResource(R.string.share_tags),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = tags.isNotEmpty(),
+                enter = fadeIn(tween(200)),
+                exit = fadeOut(tween(100))
+            ) {
+                NegativePromptCard(
+                    negativePrompt = negativePrompt
+                )
+            }
+
+            AnimatedVisibility(
+                visible = tags.isNotEmpty(),
+                enter = fadeIn(tween(200)),
+                exit = fadeOut(tween(100))
+            ) {
+                ModelRecommendationCard(
+                    detectionResult = detectionResult,
+                    recommendedModels = recommendedModels
+                )
+            }
+
+            AnimatedVisibility(visible = tags.isEmpty() && !isRunning && bitmap != null) {
+                Text(
+                    stringResource(R.string.no_tags),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             val visibleTranslatedTags = translatedTags.filter { (original, _) ->
@@ -4568,41 +4577,42 @@ private fun FooterLinkButton(
         animationSpec = spring(stiffness = 700f, dampingRatio = 0.55f),
         label = "footerLinkPressScale"
     )
-    Row(
+    Column(
         modifier = modifier
-            .height(52.dp)
+            .height(64.dp)
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale
             }
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(20.dp))
             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f),
-                shape = RoundedCornerShape(18.dp)
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                shape = RoundedCornerShape(20.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center
+            .padding(horizontal = 4.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
         Icon(
             icon,
-            contentDescription = null,
+            contentDescription = label,
             tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp)
+            modifier = Modifier.size(21.dp)
         )
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.height(3.dp))
         Text(
             text = label,
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, lineHeight = 12.sp),
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            maxLines = 2,
+            overflow = TextOverflow.Clip,
+            softWrap = true,
             textAlign = TextAlign.Center,
-            modifier = Modifier.weight(1f, fill = false)
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
