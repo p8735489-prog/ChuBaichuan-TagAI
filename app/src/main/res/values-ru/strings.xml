@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="app_name">Local Cue Word</string>
     <string name="app_hero_title">Local Cue Word</string>
@@ -372,7 +372,6 @@
     <string name="translate_network_notice_reject">Не использовать</string>
     <string name="settings_liquid_glass_toggle">Эффект «жидкое стекло»</string>
     <string name="settings_liquid_glass_toggle_summary">Включает реальные оптические эффекты стекла (размытие, преломление, дисперсия) на карточках и кнопках. Требуется Android 12 и выше.</string>
-    <!-- Точный режим / сегментация -->
     <string name="settings_precision_mode_title">Точный режим</string>
     <string name="settings_precision_mode_summary">Сначала сегментировать людей, затем тегировать — промпты точнее</string>
     <string name="settings_precision_mode_normal">Обычный режим</string>
@@ -387,14 +386,12 @@
     <string name="settings_detection_model_status">Модель обнаружения</string>
     <string name="settings_seg_model_status">Модель сегментации</string>
     <string name="settings_model_not_selected">Не выбран</string>
-    <!-- Кнопки моделей -->
     <string name="ai_model_select">Выбрать</string>
     <string name="ai_model_selected">Используется</string>
     <string name="ai_model_installed">Установлено</string>
     <string name="ai_model_builtin">Встроенная</string>
     <string name="ai_model_import_only">Только импорт</string>
     <string name="ai_model_delete">Удалить</string>
-    <!-- Центр моделей / категории -->
     <string name="tab_model_center">Модели</string>
     <string name="tab_workflow">Рабочий процесс</string>
     <string name="model_cat_tagger">Теггер</string>
@@ -413,7 +410,6 @@
     <string name="model_size">Размер</string>
     <string name="model_recommend">Рекомендация</string>
     <string name="model_official">Официальная</string>
-    <!-- Редактор рабочего процесса -->
     <string name="workflow_create">Создать рабочий процесс</string>
     <string name="workflow_execute">Выполнить рабочий процесс</string>
     <string name="workflow_executing">Выполнение…</string>
@@ -430,7 +426,6 @@
     <string name="workflow_step_translate">Перевод</string>
     <string name="workflow_step_output">Вывод промпта</string>
     <string name="workflow_name_precision_seg">Точный режим (сегментация людей)</string>
-    <!-- Карточка «Рабочий процесс · Модели» -->
     <string name="workflow_model_pairing_title">Рабочий процесс · Модели</string>
     <string name="workflow_tag_model_label">Модель тегов</string>
     <string name="workflow_tag_model_empty">Модель тегов не установлена. Скачайте её на вкладке «Модели».</string>
@@ -443,12 +438,10 @@
     <string name="workflow_detection_model_count">Установлено моделей обнаружения: %1$d</string>
     <string name="workflow_seg_model_count">Установлено моделей сегментации: %1$d</string>
     <string name="workflow_steps_label">Поток</string>
-    <!-- Первое напоминание о точном режиме -->
     <string name="precision_mode_notice_title">Уведомление о производительности</string>
     <string name="precision_mode_notice_body">Точный режим включает рабочий процесс: сегментация людей + обрезка + тегирование, что требует значительных ресурсов.</string>
     <string name="precision_mode_notice_bullets" formatted="false">· При первом использовании нужно скачать модель сегментации\n· Время вывода может увеличиться в 3-5 раз\n· На слабых устройствах возможны зависания и нехватка памяти</string>
     <string name="precision_mode_notice_footer">После подтверждения это напоминание больше не появится. Точный режим можно отключить в настройках в любой момент.</string>
-    <!-- Прочее -->
     <string name="recognition_failed">Ошибка распознавания: %1$s</string>
     <string name="device_mem_value">%1$d МБ ОЗУ</string>
     <string name="device_cpu_cores_value">%1$d ядер (%2$d больших)</string>
@@ -457,8 +450,6 @@
     <string name="import_needs_tags_hint">Продолжите импорт файла тегов из того же источника, иначе модель не будет использоваться для генерации промптов.</string>
     <string name="parallel_download_phase_suffix">%1$d-поток. ускорение</string>
     <string name="retrying_download">Повтор (%1$d/%2$d)…</string>
-
-    <!-- Prompt Weight -->
     <string name="prompt_weight_title">Вес промпта</string>
     <string name="prompt_weight_summary">Добавить веса на основе уверенности к тегам промпта</string>
     <string name="prompt_weight_enabled">Включить вес промпта</string>
@@ -479,7 +470,6 @@
     <string name="device_rec_sd8_gen1">Snapdragon 8 Gen 1+</string>
     <string name="device_rec_sd8_gen2">Snapdragon 8 Gen 2+</string>
     <string name="device_rec_sd8_gen3">Snapdragon 8 Gen 3+</string>
-    <!-- Auto-added missing strings -->
     <string name="settings_det_loading">Loading detection model…</string>
     <string name="settings_det_nnapi_title">NNAPI Hardware Acceleration</string>
     <string name="settings_det_nnapi_summary">Enable Android Neural Networks API to accelerate detection inference (auto-fallback to CPU on failure)</string>
@@ -524,4 +514,25 @@
     <string name="privacy_dialog_message">Мы серьезно относимся к вашей конфиденциальности. Хотя мы предоставляем онлайн-сервисы, их активация требует вашего согласия.</string>
     <string name="privacy_dialog_disagree">Не согласен</string>
     <string name="privacy_dialog_agree">Согласен</string>
+    <string name="ai_status_no_model">Не загружено</string>
+    <string name="workflow_progress_prepare">Подготовка моделей…</string>
+    <string name="workflow_progress_loading_det">Загрузка модели обнаружения…</string>
+    <string name="workflow_progress_loading_seg">Загрузка модели сегментации…</string>
+    <string name="workflow_progress_loading_tagger">Загрузка модели Tag…</string>
+    <string name="workflow_progress_scoring">Оценка персонажей…</string>
+    <string name="workflow_progress_filtering">Фильтрация Tag…</string>
+    <string name="inference_notification_channel">Прогресс распознавания</string>
+    <string name="inference_notification_title">Распознавание изображения</string>
+    <string name="inference_notification_text">%1$d%% · %2$s</string>
+    <string name="inference_stop">Остановить</string>
+    <string name="swipe_to_stop">← Проведите влево, чтобы остановить</string>
+    <string name="first_launch_welcome_summary">Local Cue Word — рабочее пространство для Tag с приоритетом локальной обработки. Распознавайте изображения, уточняйте Tag и по возможности работайте на устройстве.</string>
+    <string name="first_launch_feature_local_title">Локальное распознавание</string>
+    <string name="first_launch_feature_local_body">При поддержке устройством выбранная модель работает локально, без зависимости изображения от удалённого сервиса.</string>
+    <string name="first_launch_feature_open_title">Открыто и управляемо</string>
+    <string name="first_launch_feature_open_body">Модели, настройки, история и управление конфиденциальностью доступны и управляются прямо в приложении.</string>
+    <string name="first_launch_privacy_summary">Конфиденциальность прежде всего. Первое знакомство остаётся кратким, а важный выбор показан явно.</string>
+    <string name="first_launch_privacy_local_note">Локальное распознавание не означает, что все дополнительные функции работают офлайн. Функции, которым нужен интернет, отделены и доступны для просмотра в настройках.</string>
+    <string name="first_launch_next">Далее</string>
+    <string name="first_launch_privacy_agree_continue">Принять и продолжить</string>
 </resources>

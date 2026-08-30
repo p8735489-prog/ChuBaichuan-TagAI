@@ -1201,8 +1201,7 @@ private fun customBackgroundMainColorOptions() = setOf(
 
 private fun normalizeLanguageOption(option: String): String {
     return when (option) {
-        "system", "zh", "zh-rTW", "en", "ru", "ja", "ko",
-        "de", "fr", "es", "pt", "id", "vi", "th", "ar", "hi" -> option
+        "system", "zh", "zh-rTW", "en", "ja", "ko", "ru" -> option
         else -> "system"
     }
 }
@@ -1213,18 +1212,9 @@ private fun createLocalizedContext(context: Context, option: String): Context {
             "zh" -> Locale.SIMPLIFIED_CHINESE
             "zh-rTW" -> Locale.TRADITIONAL_CHINESE
             "en" -> Locale.ENGLISH
-            "ru" -> Locale("ru")
             "ja" -> Locale.JAPANESE
             "ko" -> Locale.KOREAN
-            "de" -> Locale.GERMAN
-            "fr" -> Locale.FRENCH
-            "es" -> Locale("es")
-            "pt" -> Locale("pt")
-            "id" -> Locale("id")
-            "vi" -> Locale("vi")
-            "th" -> Locale("th")
-            "ar" -> Locale("ar")
-            "hi" -> Locale("hi")
+            "ru" -> Locale("ru")
             "system" -> resolveSystemLocale()
             else -> return context
         }
@@ -1243,18 +1233,9 @@ private fun languageTagForOption(option: String): String {
         "zh" -> "zh-Hans-CN"
         "zh-rTW" -> "zh-Hant-TW"
         "en" -> "en"
-        "ru" -> "ru"
         "ja" -> "ja"
         "ko" -> "ko"
-        "de" -> "de"
-        "fr" -> "fr"
-        "es" -> "es"
-        "pt" -> "pt"
-        "id" -> "id"
-        "vi" -> "vi"
-        "th" -> "th"
-        "ar" -> "ar"
-        "hi" -> "hi"
+        "ru" -> "ru"
         else -> ""
     }
 }
@@ -7094,6 +7075,7 @@ fun FirstLaunchFlowDialog(
             }
         )
     }
+    // Supported app languages: follow system + Simplified Chinese + Traditional Chinese + English + Japanese + Korean + Russian.
     val languages = listOf(
         "system" to stringResource(R.string.settings_language_system),
         "zh" to stringResource(R.string.settings_language_zh),
@@ -7101,16 +7083,7 @@ fun FirstLaunchFlowDialog(
         "en" to stringResource(R.string.settings_language_en),
         "ja" to stringResource(R.string.settings_language_ja),
         "ko" to stringResource(R.string.settings_language_ko),
-        "ru" to stringResource(R.string.settings_language_ru),
-        "de" to stringResource(R.string.settings_language_de),
-        "fr" to stringResource(R.string.settings_language_fr),
-        "es" to stringResource(R.string.settings_language_es),
-        "pt" to stringResource(R.string.settings_language_pt),
-        "id" to stringResource(R.string.settings_language_id),
-        "vi" to stringResource(R.string.settings_language_vi),
-        "th" to stringResource(R.string.settings_language_th),
-        "ar" to stringResource(R.string.settings_language_ar),
-        "hi" to stringResource(R.string.settings_language_hi)
+        "ru" to stringResource(R.string.settings_language_ru)
     )
     val pageTitles = listOf(
         stringResource(R.string.language_select_title),
@@ -7137,19 +7110,19 @@ fun FirstLaunchFlowDialog(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.94f)
+                    .fillMaxHeight(0.90f)
                     .align(Alignment.Center),
                 shape = RoundedCornerShape(36.dp),
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 8.dp,
                 shadowElevation = 18.dp
             ) {
-                Column(Modifier.fillMaxSize().padding(22.dp)) {
+                Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 18.dp)) {
                     // A bespoke large-radius header: inspired by modern cards, not copied from the reference.
                     Box(
                         Modifier
                             .fillMaxWidth()
-                            .height(104.dp)
+                            .height(88.dp)
                             .clip(RoundedCornerShape(30.dp))
                             .background(Brush.linearGradient(listOf(
                                 MaterialTheme.colorScheme.primaryContainer,
@@ -7178,7 +7151,7 @@ fun FirstLaunchFlowDialog(
                         }
                     }
 
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(12.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                         repeat(3) { index ->
                             val selected = index == page
@@ -7190,7 +7163,7 @@ fun FirstLaunchFlowDialog(
                             Box(Modifier.padding(horizontal = 4.dp).width(width).height(7.dp).clip(RoundedCornerShape(99.dp)).background(if (selected) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = .18f)))
                         }
                     }
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(8.dp))
 
                     AnimatedContent(
                         targetState = page,
@@ -7246,9 +7219,9 @@ fun FirstLaunchFlowDialog(
                     }
 
                     Spacer(Modifier.height(12.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (page > 0) {
-                            OutlinedButton(onClick = { page-- }, shape = RoundedCornerShape(22.dp), modifier = Modifier.height(52.dp)) {
+                            OutlinedButton(onClick = { page-- }, shape = RoundedCornerShape(22.dp), modifier = Modifier.height(50.dp)) {
                                 Icon(Icons.Filled.ArrowBack, null)
                             }
                         }
@@ -7264,7 +7237,7 @@ fun FirstLaunchFlowDialog(
                                 }
                             },
                             shape = RoundedCornerShape(22.dp),
-                            modifier = Modifier.weight(1f).height(52.dp)
+                            modifier = Modifier.weight(1f).height(50.dp)
                         ) {
                             Text(
                                 when (page) {
@@ -7446,16 +7419,7 @@ fun LanguageSelectDialog(
                     "en" to stringResource(R.string.settings_language_en),
                     "ja" to stringResource(R.string.settings_language_ja),
                     "ko" to stringResource(R.string.settings_language_ko),
-                    "ru" to stringResource(R.string.settings_language_ru),
-                    "de" to stringResource(R.string.settings_language_de),
-                    "fr" to stringResource(R.string.settings_language_fr),
-                    "es" to stringResource(R.string.settings_language_es),
-                    "pt" to stringResource(R.string.settings_language_pt),
-                    "id" to stringResource(R.string.settings_language_id),
-                    "vi" to stringResource(R.string.settings_language_vi),
-                    "th" to stringResource(R.string.settings_language_th),
-                    "ar" to stringResource(R.string.settings_language_ar),
-                    "hi" to stringResource(R.string.settings_language_hi)
+                    "ru" to stringResource(R.string.settings_language_ru)
                 )
                 // 使用两列网格布局
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

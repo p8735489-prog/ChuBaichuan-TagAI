@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="app_name">Local Cue Word</string>
     <string name="app_hero_title">Local Cue Word</string>
@@ -368,8 +368,6 @@
     <string name="poetry_rejected_title">시 기능 비활성화됨</string>
     <string name="poetry_rejected_message">이전에 시 기능을 사용하지 않도록 선택했습니다. 다시 활성화하시겠습니까?</string>
     <string name="poetry_rejected_yes">다시 활성화</string>
-
-    <!-- 新增字符串（工作流 / 精准模式 / 模型） -->
     <string name="ai_model_select">선택</string>
     <string name="ai_model_selected">사용 중</string>
     <string name="ai_model_installed">설치됨</string>
@@ -450,14 +448,10 @@
     <string name="workflow_execute">워크플로우 실행</string>
     <string name="workflow_executing">실행 중…</string>
     <string name="workflow_log">실행 로그</string>
-
-    <!-- 补全缺失字符串 -->
     <string name="settings_liquid_glass_toggle">액체 유리 효과</string>
     <string name="settings_liquid_glass_toggle_summary">카드와 버튼에 실제 물리적 광학 유리 효과(블러, 굴절, 색수차)를 적용합니다. Android 12 이상 필요</string>
     <string name="settings_subtitle_poetry_notice_reject">사용 안 함</string>
     <string name="translate_network_notice_reject">사용 안 함</string>
-
-    <!-- Prompt Weight -->
     <string name="prompt_weight_title">프롬프트 가중치</string>
     <string name="prompt_weight_summary">신뢰도 기반 가중치를 프롬프트 태그에 추가</string>
     <string name="prompt_weight_enabled">프롬프트 가중치 활성화</string>
@@ -478,7 +472,6 @@
     <string name="device_rec_sd8_gen1">Snapdragon 8 Gen 1+</string>
     <string name="device_rec_sd8_gen2">Snapdragon 8 Gen 2+</string>
     <string name="device_rec_sd8_gen3">Snapdragon 8 Gen 3+</string>
-    <!-- Auto-added missing strings -->
     <string name="settings_det_loading">Loading detection model…</string>
     <string name="settings_det_nnapi_title">NNAPI Hardware Acceleration</string>
     <string name="settings_det_nnapi_summary">Enable Android Neural Networks API to accelerate detection inference (auto-fallback to CPU on failure)</string>
@@ -523,4 +516,25 @@
     <string name="privacy_dialog_message">귀하의 개인정보를 중요하게 생각합니다. 온라인 서비스를 제공하지만, 해당 서비스의 활성화에는 귀하의 동의가 필요합니다.</string>
     <string name="privacy_dialog_disagree">동의하지 않음</string>
     <string name="privacy_dialog_agree">동의함</string>
+    <string name="ai_status_no_model">다운로드되지 않음</string>
+    <string name="workflow_progress_prepare">모델 준비 중…</string>
+    <string name="workflow_progress_loading_det">검출 모델 로드 중…</string>
+    <string name="workflow_progress_loading_seg">분할 모델 로드 중…</string>
+    <string name="workflow_progress_loading_tagger">Tag 모델 로드 중…</string>
+    <string name="workflow_progress_scoring">캐릭터 점수 계산 중…</string>
+    <string name="workflow_progress_filtering">Tag 필터링 중…</string>
+    <string name="inference_notification_channel">인식 진행률</string>
+    <string name="inference_notification_title">이미지 인식 중</string>
+    <string name="inference_notification_text">%1$d%% · %2$s</string>
+    <string name="inference_stop">중지</string>
+    <string name="swipe_to_stop">← 왼쪽으로 밀어 중지</string>
+    <string name="first_launch_welcome_summary">Local Cue Word는 로컬 우선 Tag 작업 공간입니다. 이미지를 인식하고 Tag를 정리하며 가능한 한 기기에서 작업할 수 있습니다.</string>
+    <string name="first_launch_feature_local_title">로컬 우선 인식</string>
+    <string name="first_launch_feature_local_body">지원되는 경우 선택한 모델은 로컬에서 실행되며 이미지가 원격 서비스에 의존하지 않습니다.</string>
+    <string name="first_launch_feature_open_title">개방적이고 관리하기 쉬운 구조</string>
+    <string name="first_launch_feature_open_body">모델, 설정, 기록 및 개인정보 제어를 앱에서 확인하고 관리할 수 있습니다.</string>
+    <string name="first_launch_privacy_summary">개인정보 보호를 우선합니다. 첫 실행 안내는 간결하게 유지하고 중요한 선택을 명확하게 보여줍니다.</string>
+    <string name="first_launch_privacy_local_note">로컬 인식이라고 해서 모든 선택 기능이 오프라인으로 작동하는 것은 아닙니다. 네트워크가 필요한 기능은 분리되어 있으며 설정에서 확인할 수 있습니다.</string>
+    <string name="first_launch_next">다음</string>
+    <string name="first_launch_privacy_agree_continue">동의하고 계속</string>
 </resources>

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="app_name">Local Cue Word</string>
     <string name="app_hero_title">Local Cue Word</string>
@@ -132,8 +132,6 @@
     <string name="settings_experience_summary">经验系统：开启后显示等级卡片，并在识别完成后增加经验</string>
     <string name="settings_prompt_tag_limit_title">提示词数量上限</string>
     <string name="settings_prompt_tag_limit_summary">最多输出 %1$d 个提示词标签</string>
-
-    <!-- Prompt Weight -->
     <string name="prompt_weight_title">提示词权重</string>
     <string name="prompt_weight_summary">根据置信度自动为标签添加权重</string>
     <string name="prompt_weight_enabled">启用提示词权重</string>
@@ -390,21 +388,17 @@
     <string name="settings_custom_background_tab_bar_opacity">卡片与功能栏透明度：%1$s</string>
     <string name="settings_custom_background_tab_bar_opacity_hint">调整所有卡片、功能栏和底部选项栏的透明度</string>
     <string name="settings_page_summary">外观、语言、功能和文件管理都在这里调整。</string>
-    <!-- 模型管理页面 -->
     <string name="model_speed">速度</string>
     <string name="model_accuracy">精度</string>
-    <!-- 模型分类 -->
     <string name="model_cat_tagger">标签识别</string>
     <string name="model_cat_detection">目标检测</string>
     <string name="model_cat_segmentation">实例分割</string>
-    <!-- 工作流 -->
     <string name="workflow_detection_model_label">检测模型</string>
     <string name="workflow_detection_model_empty">尚未安装检测模型，请到「模型」页下载</string>
     <string name="workflow_detection_model_count">已安装 %1$d 个检测模型</string>
     <string name="workflow_seg_model_count">已安装 %1$d 个分割模型</string>
     <string name="workflow_steps_label">流程</string>
     <string name="workflow_name_precision_seg">精准模式（检测→分割→打标）</string>
-    <!-- 识别失败 / 设备能力 / 文件管理等 -->
     <string name="estimated_speed_value">· 预计 ~%1$dms</string>
     <string name="ai_model_builtin">内置</string>
     <string name="ai_model_import_only">请导入</string>
@@ -417,7 +411,6 @@
     <string name="workflow_tag_model_empty">尚未安装标签模型，请到「模型」页下载</string>
     <string name="precision_mode_notice_title">精准模式提醒</string>
     <string name="precision_mode_notice_body">精准模式会先使用 YOLO 实例分割模型检测人物轮廓，再裁剪后交给标签模型识别。此功能需要大量性能，可能导致推理速度变慢。\n\n确认开启后将不再提醒。</string>
-    <!-- 工作流进度消息 -->
     <string name="workflow_progress_executing">执行: %1$s…</string>
     <string name="workflow_progress_input">加载输入图片…</string>
     <string name="workflow_progress_detect">YOLO11n 目标检测中…</string>
@@ -446,7 +439,6 @@
     <string name="inference_notification_text">%1$d%% · %2$s</string>
     <string name="inference_stop">停止识别</string>
     <string name="swipe_to_stop">← 左滑停止识别</string>
-    <!-- 模型管理页面（补充） -->
     <string name="tab_model_center">模型中心</string>
     <string name="tab_workflow">工作流</string>
     <string name="model_cat_enhancement">图像增强</string>
@@ -460,7 +452,6 @@
     <string name="model_size">大小</string>
     <string name="model_recommend">推荐</string>
     <string name="model_official">官方</string>
-    <!-- 工作流编辑器 -->
     <string name="workflow_create">创建自定义工作流</string>
     <string name="workflow_execute">执行工作流</string>
     <string name="workflow_executing">执行中…</string>
@@ -469,7 +460,6 @@
     <string name="workflow_preset_normal">普通模式</string>
     <string name="workflow_preset_precision">精准模式</string>
     <string name="workflow_preset_detect_translate">检测 + 打标 + 翻译</string>
-    <!-- 工作流步骤名称 -->
     <string name="workflow_step_input">输入图片</string>
     <string name="workflow_step_segment">实例分割</string>
     <string name="workflow_step_crop_person">裁剪主体</string>
@@ -477,10 +467,8 @@
     <string name="workflow_step_tag">标签识别</string>
     <string name="workflow_step_translate">翻译</string>
     <string name="workflow_step_output">输出提示词</string>
-    <!-- 液态玻璃 -->
     <string name="settings_liquid_glass_toggle">液态玻璃效果</string>
     <string name="settings_liquid_glass_toggle_summary">开启后卡片和按钮呈现真实物理光学玻璃效果（模糊、折射、色散），需要 Android 12 及以上</string>
-    <!-- 检测模型设置 -->
     <string name="settings_model_status_title">模型状态</string>
     <string name="settings_det_loading">正在加载检测模型…</string>
     <string name="settings_det_nnapi_title">NNAPI 硬件加速</string>
@@ -489,26 +477,21 @@
     <string name="settings_det_model_hint">下载 YOLO 检测模型（如 yolo11n.onnx），未找到时自动回退普通模式</string>
     <string name="settings_det_model_status">检测模型（精准模式）</string>
     <string name="settings_model_not_selected">未选择</string>
-    <!-- 工作流 · 模型搭配卡片 -->
     <string name="workflow_model_pairing_title">工作流 · 模型搭配</string>
     <string name="workflow_precision_switch_title">精准模式（人物分割 + 裁剪）</string>
     <string name="workflow_precision_switch_summary">先分割人物区域再打标，精度更高</string>
-    <!-- 精准模式提醒补充 -->
     <string name="precision_mode_notice_bullets" formatted="false">· 首次使用需下载分割模型\n· 推理时间可能增加 3-5 倍\n· 低端设备可能出现卡顿或 OOM</string>
     <string name="precision_mode_notice_footer">确认后将不再提醒，可在设置中随时关闭精准模式。</string>
-    <!-- 语言选择 -->
     <string name="settings_language_zh_rTW">繁體中文</string>
     <string name="language_select_title">选择语言</string>
     <string name="language_select_message">请选择您偏好的语言，之后可以在设置中随时更改</string>
     <string name="language_select_confirm">确定</string>
-    <!-- 翻译/古诗词重新开启 -->
     <string name="translate_rejected_title">翻译功能已关闭</string>
     <string name="translate_rejected_message">您之前选择了不使用翻译功能。是否要重新开启？</string>
     <string name="translate_rejected_yes">重新开启</string>
     <string name="poetry_rejected_title">古诗词功能已关闭</string>
     <string name="poetry_rejected_message">您之前选择了不开启古诗词功能。是否要重新开启？</string>
     <string name="poetry_rejected_yes">重新开启</string>
-    <!-- 识别失败 / 设备能力 / 文件管理补充 -->
     <string name="recognition_failed">识别失败：%1$s</string>
     <string name="device_mem_value">%1$dMB 内存</string>
     <string name="device_cpu_cores_value">%1$d 核（%2$d 大核）</string>
@@ -516,12 +499,10 @@
     <string name="import_needs_tags_hint">请继续导入与该模型同源的标签表文件，否则模型不会用于生成提示词。</string>
     <string name="parallel_download_phase_suffix">%1$d 线程加速</string>
     <string name="retrying_download">重试中 (%1$d/%2$d)…</string>
-    <!-- 模型适用类型标签 -->
     <string name="model_type_anime">二次元</string>
     <string name="model_type_real">现实</string>
     <string name="model_type_general">通用</string>
     <string name="model_type_anime_real">二次元 / 现实</string>
-    <!-- 多模型同时下载 -->
     <string name="download_max_concurrent_reached">最多同时下载 3 个模型</string>
     <string name="download_concurrent_count">%1$d 个下载中</string>
     <string name="download_total_progress">总进度：%1$d%%</string>
@@ -529,7 +510,6 @@
     <string name="download_lines_count">%1$d 条线路</string>
     <string name="download_speed_format">%1$s/s</string>
     <string name="download_remaining_format">%1$d%% · %2$s/s</string>
-    <!-- 工作流模型状态格式 -->
     <string name="workflow_det_model_status_format">当前：%1$s v%2$s (%3$s) · 共 %4$d 个</string>
     <string name="workflow_seg_model_status_format">当前：%1$s · %2$s · 共 %3$d 个</string>
     <string name="model_status_loaded">已加载</string>
@@ -544,7 +524,6 @@
     <string name="privacy_dialog_message">我们特别重视您的隐私。我们提供联网服务，但该服务的开启也需要您的同意后生效</string>
     <string name="privacy_dialog_disagree">不同意</string>
     <string name="privacy_dialog_agree">同意</string>
-
     <string name="first_launch_welcome_summary">Local Cue Word 是一个本地优先的 Tag 工作空间。识别图片、整理 Tag，并尽可能让整个工作流程留在设备上。</string>
     <string name="first_launch_feature_local_title">本地优先识别</string>
     <string name="first_launch_feature_local_body">在支持的情况下，所选模型会在本地运行，不让图片依赖远程处理。</string>
@@ -553,8 +532,7 @@
     <string name="first_launch_privacy_summary">隐私优先。我们把首次使用说明做得简洁，并把重要的选择清楚地交给您。</string>
     <string name="first_launch_privacy_local_note">本地识别并不代表所有可选功能都完全离线。需要联网的功能会保持独立，并可在设置中查看和管理。</string>
     <string name="first_launch_next">下一步</string>
-
-
     <string name="settings_subtitle_poetry_notice_reject">Don\'t enable</string>
     <string name="translate_network_notice_reject">Don\'t use</string>
+    <string name="first_launch_privacy_agree_continue">同意并继续</string>
 </resources>

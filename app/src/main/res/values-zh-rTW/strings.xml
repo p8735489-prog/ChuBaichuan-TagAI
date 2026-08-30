@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="app_name">Local Cue Word</string>
     <string name="app_hero_title">Local Cue Word</string>
@@ -372,14 +372,10 @@
     <string name="poetry_rejected_title">古詩詞功能已關閉</string>
     <string name="poetry_rejected_message">您之前選擇了不開啟古詩詞功能。是否要重新開啟？</string>
     <string name="poetry_rejected_yes">重新開啟</string>
-
-    <!-- 模型操作按鈕 -->
     <string name="ai_model_select">選擇</string>
     <string name="ai_model_selected">目前使用</string>
     <string name="ai_model_installed">已安裝</string>
     <string name="ai_model_delete">刪除</string>
-
-    <!-- 模型分類與屬性 -->
     <string name="model_cat_tagger">標籤識別</string>
     <string name="model_cat_detection">目標檢測</string>
     <string name="model_cat_segmentation">實例分割</string>
@@ -396,20 +392,14 @@
     <string name="model_enable_btn">啟用</string>
     <string name="model_test_btn">測試</string>
     <string name="model_device_capability">裝置能力</string>
-
-    <!-- 裝置資訊 -->
     <string name="device_mem_value">%1$dMB 記憶體</string>
     <string name="device_cpu_cores_value">%1$d 核（%2$d 大核）</string>
     <string name="estimated_speed_value">· 預計 ~%1$dms</string>
     <string name="file_count_size_value">%1$d 個檔案 · %2$s</string>
-
-    <!-- 匯入與下載 -->
     <string name="import_needs_tags_hint">請繼續匯入與該模型同源的標籤表檔案，否則模型不會用於生成提示詞。</string>
     <string name="parallel_download_phase_suffix">%1$d 執行緒加速</string>
     <string name="retrying_download">重試中 (%1$d/%2$d)…</string>
     <string name="recognition_failed">識別失敗：%1$s</string>
-
-    <!-- 精準模式 / 分割 -->
     <string name="settings_precision_mode_title">精準模式</string>
     <string name="settings_precision_mode_summary">開啟後先分割人物再打標，標籤更精準</string>
     <string name="settings_precision_mode_normal">普通模式</string>
@@ -424,14 +414,10 @@
     <string name="settings_detection_model_status">目標檢測模型</string>
     <string name="settings_seg_model_status">實例分割模型</string>
     <string name="settings_model_not_selected">未選擇</string>
-
-    <!-- 精準模式提醒 -->
     <string name="precision_mode_notice_title">效能提醒</string>
     <string name="precision_mode_notice_body">精準模式將啟用人物分割 + 裁剪 + 標籤識別的工作流，需要大量效能支援。</string>
     <string name="precision_mode_notice_bullets" formatted="false">· 首次使用需下載分割模型\n· 推理時間可能增加 3-5 倍\n· 低階裝置可能出現卡頓或 OOM</string>
     <string name="precision_mode_notice_footer">確認後將不再提醒，可在設定中隨時關閉精準模式。</string>
-
-    <!-- 工作流 -->
     <string name="tab_workflow">工作流</string>
     <string name="tab_model_center">模型中心</string>
     <string name="workflow_step_input">輸入圖片</string>
@@ -465,8 +451,6 @@
     <string name="ai_model_builtin">內建</string>
     <string name="ai_model_import_only">請匯入</string>
     <string name="ai_model_download_success_det">已下載：%1$s，請至模型列表點擊「選擇」啟用</string>
-
-    <!-- Prompt Weight -->
     <string name="prompt_weight_title">提示詞權重</string>
     <string name="prompt_weight_summary">根據可信度為提示詞標籤添加權重</string>
     <string name="prompt_weight_enabled">啟用提示詞權重</string>
@@ -477,12 +461,10 @@
     <string name="prompt_weight_strength">強度</string>
     <string name="prompt_weight_min_confidence">最小可信度</string>
     <string name="prompt_weight_max">最大權重</string>
-    <!-- 模型適用類型標籤 -->
     <string name="model_type_anime">二次元</string>
     <string name="model_type_real">現實</string>
     <string name="model_type_general">通用</string>
     <string name="model_type_anime_real">二次元 / 現實</string>
-    <!-- 多模型同時下載 -->
     <string name="download_max_concurrent_reached">最多同時下載 3 個模型</string>
     <string name="download_concurrent_count">%1$d 個下載中</string>
     <string name="download_total_progress">總進度：%1$d%%</string>
@@ -496,7 +478,6 @@
     <string name="device_rec_sd8_gen1">驍龍 8 Gen1+</string>
     <string name="device_rec_sd8_gen2">驍龍 8 Gen2+</string>
     <string name="device_rec_sd8_gen3">驍龍 8 Gen3+</string>
-    <!-- Auto-added missing strings -->
     <string name="settings_det_loading">Loading detection model…</string>
     <string name="settings_det_nnapi_title">NNAPI Hardware Acceleration</string>
     <string name="settings_det_nnapi_summary">Enable Android Neural Networks API to accelerate detection inference (auto-fallback to CPU on failure)</string>
@@ -545,4 +526,13 @@
     <string name="privacy_dialog_message">我們特別重視您的隱私。我們提供聯網服務，但該服務的開啟也需要您的同意後生效</string>
     <string name="privacy_dialog_disagree">不同意</string>
     <string name="privacy_dialog_agree">同意</string>
+    <string name="first_launch_welcome_summary">Local Cue Word 是一款本機優先的 Tag 工作台。辨識圖片、整理 Tag，並盡可能讓工作流程留在裝置上。</string>
+    <string name="first_launch_feature_local_title">本機優先辨識</string>
+    <string name="first_launch_feature_local_body">在支援的情況下，所選模型會在本機執行，不讓圖片依賴遠端服務。</string>
+    <string name="first_launch_feature_open_title">開放且可控</string>
+    <string name="first_launch_feature_open_body">模型、設定、歷史記錄與隱私控制都清楚可見，並可直接在 App 內管理。</string>
+    <string name="first_launch_privacy_summary">隱私優先。首次使用說明保持簡潔，同時把重要選擇清楚交給你。</string>
+    <string name="first_launch_privacy_local_note">本機辨識不代表所有選用功能都離線執行。需要網路的功能會分開處理，並可在設定中查看。</string>
+    <string name="first_launch_next">下一項</string>
+    <string name="first_launch_privacy_agree_continue">同意並繼續</string>
 </resources>

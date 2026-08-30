@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="app_name">Local Cue Word</string>
     <string name="app_hero_title">Local Cue Word</string>
@@ -392,7 +392,6 @@
     <string name="poetry_rejected_title">Poetry Disabled</string>
     <string name="poetry_rejected_message">You previously chose not to use the poetry feature. Would you like to re-enable it?</string>
     <string name="poetry_rejected_yes">Re-enable</string>
-    <!-- Model Manager -->
     <string name="tab_model_center">Models</string>
     <string name="tab_workflow">Workflow</string>
     <string name="model_cat_tagger">Tagger</string>
@@ -411,7 +410,6 @@
     <string name="model_size">Size</string>
     <string name="model_recommend">Recommend</string>
     <string name="model_official">Official</string>
-    <!-- Workflow Editor -->
     <string name="workflow_create">Create Custom Workflow</string>
     <string name="workflow_execute">Execute Workflow</string>
     <string name="workflow_executing">Running…</string>
@@ -420,10 +418,8 @@
     <string name="workflow_preset_normal">Normal Mode</string>
     <string name="workflow_preset_precision">Precision Mode</string>
     <string name="workflow_preset_detect_translate">Detect + Tag + Translate</string>
-    <!-- Liquid glass -->
     <string name="settings_liquid_glass_toggle">Liquid Glass Effect</string>
     <string name="settings_liquid_glass_toggle_summary">Enables real physical optical glass effects (blur, refraction, dispersion) on cards and buttons. Requires Android 12 or above.</string>
-    <!-- Workflow step names (for flow preview) -->
     <string name="workflow_step_input">Input Image</string>
     <string name="workflow_step_segment">Segmentation</string>
     <string name="workflow_step_crop_person">Crop Person</string>
@@ -432,7 +428,6 @@
     <string name="workflow_step_translate">Translate</string>
     <string name="workflow_step_output">Output Prompt</string>
     <string name="workflow_name_precision_seg">Precision Mode (Detect + Segment)</string>
-    <!-- Workflow progress messages -->
     <string name="workflow_progress_executing">Executing: %1$s…</string>
     <string name="workflow_progress_input">Loading input image…</string>
     <string name="workflow_progress_detect">Running YOLO11n detection…</string>
@@ -450,7 +445,6 @@
     <string name="workflow_progress_tagger">WD Tagger inference…</string>
     <string name="workflow_progress_det_not_loaded">Detection model load failed: %1$s, skipping</string>
     <string name="workflow_progress_seg_not_loaded">Segmentation model not loaded, skipping</string>
-    <!-- Workflow · Model pairing card -->
     <string name="workflow_model_pairing_title">Workflow · Model Pairing</string>
     <string name="workflow_tag_model_label">Tag Model</string>
     <string name="workflow_tag_model_empty">No tag model installed yet. Go to the Models tab to download one.</string>
@@ -463,12 +457,10 @@
     <string name="workflow_detection_model_count">%1$d detection model(s) installed</string>
     <string name="workflow_seg_model_count">%1$d segmentation model(s) installed</string>
     <string name="workflow_steps_label">Flow</string>
-    <!-- Precision mode first-time notice -->
     <string name="precision_mode_notice_title">Performance Notice</string>
     <string name="precision_mode_notice_body">Precision Mode enables a person segmentation + crop + tagging workflow, which requires significant performance.</string>
     <string name="precision_mode_notice_bullets" formatted="false">· First use requires downloading the segmentation model\n· Inference time may increase 3-5x\n· Low-end devices may lag or run out of memory</string>
     <string name="precision_mode_notice_footer">After confirming, this notice won\'t appear again. You can turn off Precision Mode anytime in Settings.</string>
-    <!-- Recognition failed / device capability / file management -->
     <string name="recognition_failed">Recognition failed: %1$s</string>
     <string name="device_mem_value">%1$dMB RAM</string>
     <string name="device_cpu_cores_value">%1$d cores (%2$d big)</string>
@@ -477,20 +469,16 @@
     <string name="import_needs_tags_hint">Please continue to import the matching tag file for this model, otherwise it won\'t be used to generate prompts.</string>
     <string name="parallel_download_phase_suffix">%1$d-thread boost</string>
     <string name="retrying_download">Retrying (%1$d/%2$d)…</string>
-    <!-- Detection model settings -->
     <string name="settings_det_loading">Loading detection model…</string>
     <string name="settings_det_nnapi_title">NNAPI Hardware Acceleration</string>
     <string name="settings_det_nnapi_summary">Enable Android Neural Networks API to accelerate detection inference (auto-fallback to CPU on failure)</string>
     <string name="settings_det_confidence_title">Detection confidence: %1$s</string>
     <string name="settings_det_model_hint">Download a YOLO detection model (e.g. yolo11n.onnx). Auto-falls back to normal mode if not found</string>
     <string name="settings_det_model_status">Detection Model (Precision Mode)</string>
-    <!-- Workflow model status formats -->
     <string name="workflow_det_model_status_format">Current: %1$s v%2$s (%3$s) · Total %4$d</string>
     <string name="workflow_seg_model_status_format">Current: %1$s · %2$s · Total %3$d</string>
     <string name="model_status_loaded">Loaded</string>
     <string name="model_status_not_loaded">Not loaded</string>
-
-    <!-- Prompt Weight -->
     <string name="prompt_weight_title">Prompt weight</string>
     <string name="prompt_weight_summary">Add confidence-based weights to prompt tags</string>
     <string name="prompt_weight_enabled">Enable prompt weight</string>
@@ -505,15 +493,46 @@
     <string name="prompt_weight_strength">Strength</string>
     <string name="prompt_weight_min_confidence">Min confidence</string>
     <string name="prompt_weight_max">Max weight</string>
-    <!-- Model descriptions for new tagger models -->
     <string name="ai_model_desc_camie_v2">Camie v2 tagger, excels at character and detail recognition, broad tag coverage</string>
     <string name="ai_model_desc_pixai_v09">PixAI v0.9 tagger, optimized for anime illustration tagging, high accuracy on style tags</string>
     <string name="ai_model_desc_animetimm_dbv4">AnimeTimm with Danbooru DBv4 tag set, strong generalization across anime styles</string>
-    <!-- Multi-model concurrent download -->
     <string name="download_max_concurrent_reached">Up to 3 models can be downloaded simultaneously</string>
     <string name="download_concurrent_count">%1$d downloading</string>
     <string name="privacy_dialog_title">Privacy Protection Statement</string>
     <string name="privacy_dialog_message">We take your privacy seriously. Although we provide online services, they require your consent before activation.</string>
     <string name="privacy_dialog_disagree">Disagree</string>
     <string name="privacy_dialog_agree">Agree</string>
+    <string name="ai_status_no_model">Not downloaded</string>
+    <string name="image_load_failed">Failed to load image. Please try a different image.</string>
+    <string name="workflow_progress_prepare">Preparing models…</string>
+    <string name="workflow_progress_loading_det">Loading detection model…</string>
+    <string name="workflow_progress_loading_seg">Loading segmentation model…</string>
+    <string name="workflow_progress_loading_tagger">Loading tagger model…</string>
+    <string name="workflow_progress_scoring">Scoring characters…</string>
+    <string name="workflow_progress_filtering">Filtering tags…</string>
+    <string name="inference_notification_channel">Inference Progress</string>
+    <string name="inference_notification_title">Recognizing image</string>
+    <string name="inference_notification_text">%1$d%% · %2$s</string>
+    <string name="inference_stop">Stop</string>
+    <string name="swipe_to_stop">← Swipe left to stop</string>
+    <string name="download_total_progress">Overall: %1$d%%</string>
+    <string name="download_total_speed">Total: %1$s/s</string>
+    <string name="download_lines_count">%1$d lines active</string>
+    <string name="download_speed_format">%1$s/s</string>
+    <string name="download_remaining_format">%1$d%% · %2$s/s</string>
+    <string name="device_rec_all">All devices</string>
+    <string name="device_rec_sd7_plus_gen2">SD 7+ Gen 2+</string>
+    <string name="device_rec_sd8_plus_gen1">SD 8+ Gen 1+</string>
+    <string name="device_rec_sd8_gen1">SD 8 Gen 1+</string>
+    <string name="device_rec_sd8_gen2">SD 8 Gen 2+</string>
+    <string name="device_rec_sd8_gen3">SD 8 Gen 3+</string>
+    <string name="first_launch_welcome_summary">Local Cue Word is a local-first tag workspace. Recognize images, refine tags, and keep your workflow on your device.</string>
+    <string name="first_launch_feature_local_title">Local-first recognition</string>
+    <string name="first_launch_feature_local_body">Your selected model runs locally whenever supported, without making your image a remote dependency.</string>
+    <string name="first_launch_feature_open_title">Open and controllable</string>
+    <string name="first_launch_feature_open_body">Models, settings, history, and privacy controls stay visible and manageable in the app.</string>
+    <string name="first_launch_privacy_summary">Privacy comes first. We keep the first-run explanation short and make the important choice explicit.</string>
+    <string name="first_launch_privacy_local_note">Local recognition does not mean every optional feature is offline. Features that need network access are kept separate and can be reviewed in Settings.</string>
+    <string name="first_launch_next">Next</string>
+    <string name="first_launch_privacy_agree_continue">Agree &amp; continue</string>
 </resources>
