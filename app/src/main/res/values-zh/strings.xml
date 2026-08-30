@@ -17,7 +17,7 @@
     <string name="settings_subtitle_poetry_notice_confirm">开启古诗词</string>
     <string name="pick_image">选择图片</string>
     <string name="run_tagging">开始识别</string>
-    <string name="copy_tags">复制标签</string>
+    <string name="copy_tags">复制tag</string>
     <string name="share_tags">分享标签</string>
     <string name="special_link_share_text">Local Cue Word Tag 特殊链接：%1$s</string>
     <string name="special_link_loaded">已解析特殊链接并载入 Tag</string>
@@ -543,4 +543,14 @@
     <string name="privacy_dialog_message">我们特别重视您的隐私。我们提供联网服务，但该服务的开启也需要您的同意后生效</string>
     <string name="privacy_dialog_disagree">不同意</string>
     <string name="privacy_dialog_agree">同意</string>
+
+    <string name="first_launch_welcome_summary">Local Cue Word 是一个本地优先的 Tag 工作空间。识别图片、整理 Tag，并尽可能让整个工作流程留在设备上。</string>
+    <string name="first_launch_feature_local_title">本地优先识别</string>
+    <string name="first_launch_feature_local_body">在支持的情况下，所选模型会在本地运行，不让图片依赖远程处理。</string>
+    <string name="first_launch_feature_open_title">开放且可控</string>
+    <string name="first_launch_feature_open_body">模型、设置、历史记录和隐私控制都清晰可见，并可在应用内管理。</string>
+    <string name="first_launch_privacy_summary">隐私优先。我们把首次使用说明做得简洁，并把重要的选择清楚地交给您。</string>
+    <string name="first_launch_privacy_local_note">本地识别并不代表所有可选功能都完全离线。需要联网的功能会保持独立，并可在设置中查看和管理。</string>
+    <string name="first_launch_next">下一步</string>
+
 </resources>

@@ -11,7 +11,7 @@
 <p align="center">
   <img alt="Android" src="https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white" />
   <img alt="Local AI" src="https://img.shields.io/badge/Local_AI-ONNX-005CED?style=for-the-badge&logo=onnx&logoColor=white" />
-  <img alt="Version" src="https://img.shields.io/badge/Version-3.6.1-FF6B35?style=for-the-badge" />
+  <img alt="Version" src="https://img.shields.io/badge/Version-3.6.3-FF6B35?style=for-the-badge" />
   <img alt="License" src="https://img.shields.io/badge/License-Apache%202.0-D22128?style=for-the-badge" />
 </p>
 

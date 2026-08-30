@@ -659,9 +659,17 @@ class MainActivity : ComponentActivity() {
             var heroPoetryNoticeShown by remember { mutableStateOf(prefs.getBoolean(KEY_HERO_POETRY_NOTICE_SHOWN, false)) }
             var heroPoetryRejected by remember { mutableStateOf(prefs.getBoolean(KEY_HERO_POETRY_REJECTED, false)) }
             var languageOption by remember { mutableStateOf(normalizeLanguageOption(prefs.getString(KEY_LANGUAGE, "system") ?: "system")) }
-            var showIntroDialog by remember { mutableStateOf(!prefs.getBoolean(KEY_INTRO_SHOWN, false)) }
-            var showLanguageSelectDialog by remember { mutableStateOf(!prefs.getBoolean(KEY_LANGUAGE_SELECTED, false)) }
-            var showPrivacyDialog by remember { mutableStateOf(!prefs.getBoolean(KEY_PRIVACY_AGREED, false) && prefs.getBoolean(KEY_INTRO_SHOWN, false) && prefs.getBoolean(KEY_LANGUAGE_SELECTED, false)) }
+            var showFirstLaunchFlowDialog by remember {
+                mutableStateOf(
+                    !prefs.getBoolean(KEY_INTRO_SHOWN, false) ||
+                        !prefs.getBoolean(KEY_LANGUAGE_SELECTED, false) ||
+                        !prefs.getBoolean(KEY_PRIVACY_AGREED, false)
+                )
+            }
+            // Legacy dialogs remain available from Settings, but never stack on the new first-launch flow.
+            var showIntroDialog by remember { mutableStateOf(false) }
+            var showLanguageSelectDialog by remember { mutableStateOf(false) }
+            var showPrivacyDialog by remember { mutableStateOf(false) }
             var generalTagWeight by remember { mutableStateOf(prefs.getFloat(KEY_GENERAL_TAG_WEIGHT, 1f)) }
             var characterTagWeight by remember { mutableStateOf(prefs.getFloat(KEY_CHARACTER_TAG_WEIGHT, 1f)) }
             var promptTagLimit by remember {
@@ -1013,6 +1021,22 @@ class MainActivity : ComponentActivity() {
                                     languageOption = normalizedOption
                                     recreate()
                                 }
+                            },
+                            showFirstLaunchFlowDialog = showFirstLaunchFlowDialog,
+                            onFirstLaunchFlowDismiss = {
+                                showFirstLaunchFlowDialog = false
+                                prefs.edit()
+                                    .putBoolean(KEY_INTRO_SHOWN, true)
+                                    .putBoolean(KEY_LANGUAGE_SELECTED, true)
+                                    .putBoolean(KEY_PRIVACY_AGREED, true)
+                                    .apply()
+                                recreate()
+                            },
+                            onFirstLaunchLanguageChange = { option ->
+                                val normalized = normalizeLanguageOption(option)
+                                prefs.edit().putString(KEY_LANGUAGE, normalized).putBoolean(KEY_LANGUAGE_SELECTED, true).apply()
+                                applyAppLocale(this@MainActivity, normalized)
+                                languageOption = normalized
                             },
                             showIntroDialog = showIntroDialog,
                             onIntroDismiss = {
@@ -1366,6 +1390,9 @@ fun TaggerScreen(
     darkModeOption: String,
     onDarkModeChange: (String) -> Unit,
     languageOption: String,
+    showFirstLaunchFlowDialog: Boolean,
+    onFirstLaunchFlowDismiss: () -> Unit,
+    onFirstLaunchLanguageChange: (String) -> Unit,
     incomingSpecialLinkRecord: TagRecord?,
     onLanguageChange: (String) -> Unit,
     showIntroDialog: Boolean,
@@ -2218,6 +2245,20 @@ fun TaggerScreen(
         )
     }
 
+    if (showFirstLaunchFlowDialog) {
+        FirstLaunchFlowDialog(
+            currentLanguage = languageOption,
+            onLanguageChange = onFirstLaunchLanguageChange,
+            onPrivacyAgree = {
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit().putBoolean(KEY_PRIVACY_AGREED, true).apply()
+            },
+            onComplete = onFirstLaunchFlowDismiss,
+            onDisagree = onPrivacyDisagree
+        )
+    }
+
+    // Settings-triggered legacy dialogs are still supported, but are no longer used for first launch.
     if (showLanguageSelectDialog) {
         LanguageSelectDialog(
             currentLanguage = languageOption,
@@ -2229,29 +2270,19 @@ fun TaggerScreen(
                     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
                         .putBoolean(KEY_LANGUAGE_SELECTED, true).apply()
                     onShowLanguageSelectDialogChange(false)
-                    // 语言选择完成后，先显示隐私声明（如果未同意）
                     if (!context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                            .getBoolean(KEY_PRIVACY_AGREED, false)) {
-                        onShowPrivacyDialog()
-                    } else if (!context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                            .getBoolean(KEY_INTRO_SHOWN, false)) {
-                        // 隐私已同意但未看过欢迎弹窗，显示欢迎弹窗
-                        onShowIntroDialog()
-                    }
+                            .getBoolean(KEY_PRIVACY_AGREED, false)) onShowPrivacyDialog()
+                    else if (!context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .getBoolean(KEY_INTRO_SHOWN, false)) onShowIntroDialog()
                 }
             }
         )
     }
 
-    if (showIntroDialog) {
-        IntroDialog(onDismiss = onIntroDismiss)
-    }
+    if (showIntroDialog) IntroDialog(onDismiss = onIntroDismiss)
 
     if (showPrivacyDialog) {
-        PrivacyDialog(
-            onAgree = onPrivacyAgree,
-            onDisagree = onPrivacyDisagree
-        )
+        PrivacyDialog(onAgree = onPrivacyAgree, onDisagree = onPrivacyDisagree)
     }
 
     if (showExperienceIntroDialog) {
@@ -2811,43 +2842,6 @@ fun TaggerScreen(
     Scaffold(
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
-        floatingActionButton = {
-            // 一键复制提示词 — dedicated one-tap "copy as prompt" action,
-            // always reachable without scrolling to the button row below.
-            if (selectedMainTab == 0 && tags.isNotEmpty()) {
-                ExtendedFloatingActionButton(
-                    text = {
-                        Text(
-                            text = stringResource(R.string.copy_prompt),
-                            style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    },
-                    icon = {
-                        Icon(
-                            Icons.Filled.AutoAwesome,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    },
-                    shape = RoundedCornerShape(18.dp),
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    elevation = FloatingActionButtonDefaults.elevation(
-                        defaultElevation = 5.dp,
-                        pressedElevation = 4.dp,
-                        focusedElevation = 5.dp,
-                        hoveredElevation = 6.dp
-                    ),
-                    modifier = Modifier
-                        .height(48.dp)
-                        .navigationBarsPadding()
-                        .padding(bottom = 56.dp),
-                    onClick = { copyTextToClipboard(context, autoPromptDraft.fullPrompt, "auto_prompt") }
-                )
-            }
-        },
         bottomBar = {
             IosMorphingSegmentedControl(
                 options = listOf(
@@ -3797,9 +3791,7 @@ fun TaggerScreen(
                 AutoPromptWriterCard(
                     promptDraft = autoPromptDraft,
                     isTranslating = isTranslating,
-                    onTranslate = openTranslateWithNotice,
-                    onCopyPrompt = { copyTextToClipboard(context, autoPromptDraft.fullPrompt, "auto_prompt") },
-                    onCopyOriginalPrompt = { copyTextToClipboard(context, currentTagText, "original_prompt") }
+                    onTranslate = openTranslateWithNotice
                 )
             }
 
@@ -3809,8 +3801,7 @@ fun TaggerScreen(
                 exit = fadeOut(tween(100))
             ) {
                 NegativePromptCard(
-                    negativePrompt = negativePrompt,
-                    onCopy = { copyTextToClipboard(context, negativePrompt, "negative_prompt") }
+                    negativePrompt = negativePrompt
                 )
             }
 
@@ -3831,26 +3822,26 @@ fun TaggerScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        OutlinedButton(
-                            shape = RoundedCornerShape(20.dp),
+                        Button(
+                            shape = RoundedCornerShape(22.dp),
                             modifier = Modifier
                                 .weight(1f)
-                                .height(48.dp),
+                                .height(52.dp),
                             onClick = { copyTagsToClipboard(context, limitedTags) }
                         ) {
-                            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
+                            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(19.dp))
+                            Spacer(Modifier.width(7.dp))
                             Text(stringResource(R.string.copy_tags), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         OutlinedButton(
-                            shape = RoundedCornerShape(20.dp),
+                            shape = RoundedCornerShape(22.dp),
                             modifier = Modifier
                                 .weight(1f)
-                                .height(48.dp),
+                                .height(52.dp),
                             onClick = { shareTags(context, limitedTags) }
                         ) {
-                            Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
+                            Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(19.dp))
+                            Spacer(Modifier.width(7.dp))
                             Text(stringResource(R.string.share_tags), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
@@ -5001,9 +4992,7 @@ private fun PixelSegmentedProgressBar(
 fun AutoPromptWriterCard(
     promptDraft: AutoPromptDraft,
     isTranslating: Boolean,
-    onTranslate: () -> Unit,
-    onCopyPrompt: () -> Unit,
-    onCopyOriginalPrompt: () -> Unit
+    onTranslate: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(22.dp),
@@ -5055,26 +5044,6 @@ fun AutoPromptWriterCard(
             DynamicPromptBox(
                 text = promptDraft.fullPrompt.ifBlank { stringResource(R.string.auto_prompt_empty) }
             )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    modifier = Modifier.weight(1f),
-                    onClick = onCopyPrompt,
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text("复制优化 Prompt", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                OutlinedButton(
-                    modifier = Modifier.weight(1f),
-                    onClick = onCopyOriginalPrompt,
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text("复制原始 Prompt", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
 
             AutoPromptCategoryRow(stringResource(R.string.auto_prompt_quality), promptDraft.quality)
             AutoPromptCategoryRow(stringResource(R.string.auto_prompt_subject), promptDraft.subject)
@@ -5133,8 +5102,7 @@ private fun AutoPromptCategoryRow(
 
 @Composable
 fun NegativePromptCard(
-    negativePrompt: String,
-    onCopy: () -> Unit
+    negativePrompt: String
 ) {
     Card(
         shape = RoundedCornerShape(20.dp),
@@ -5158,12 +5126,6 @@ fun NegativePromptCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp
             )
-            OutlinedButton(
-                onClick = onCopy,
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Text(stringResource(R.string.copy_negative_prompt))
-            }
         }
     }
 }
@@ -5837,19 +5799,10 @@ private fun PromptRecordDialog(
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = {
-                    copyTextToClipboard(
-                        context,
-                        context.getString(R.string.record_prompt_copy_text, positivePrompt, negativePrompt)
-                    )
-                }
+            Button(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(20.dp)
             ) {
-                Text(stringResource(R.string.record_copy), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
                 Text(stringResource(R.string.settings_close))
             }
         }
@@ -7095,6 +7048,278 @@ fun AiModelDialog(
 }
 
 @Composable
+fun FirstLaunchFlowDialog(
+    currentLanguage: String,
+    onLanguageChange: (String) -> Unit,
+    onPrivacyAgree: () -> Unit,
+    onComplete: () -> Unit,
+    onDisagree: () -> Unit
+) {
+    val context = LocalContext.current
+    var page by remember {
+        mutableIntStateOf(
+            when {
+                !context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getBoolean(KEY_LANGUAGE_SELECTED, false) -> 0
+                !context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getBoolean(KEY_PRIVACY_AGREED, false) -> 1
+                else -> 2
+            }
+        )
+    }
+    val pageTitles = listOf(
+        stringResource(R.string.welcome_dialog_title),
+        stringResource(R.string.privacy_dialog_title),
+        stringResource(R.string.language_select_title)
+    )
+    val pageSummaries = listOf(
+        stringResource(R.string.first_launch_welcome_summary),
+        stringResource(R.string.first_launch_privacy_summary),
+        stringResource(R.string.language_select_message)
+    )
+    val accent = MaterialTheme.colorScheme.primary
+    val surface = MaterialTheme.colorScheme.surface
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false, dismissOnClickOutside = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.34f))
+                .padding(horizontal = 18.dp, vertical = 28.dp)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.Center)
+                    .clip(RoundedCornerShape(38.dp)),
+                color = surface,
+                tonalElevation = 8.dp,
+                shadowElevation = 18.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp)
+                ) {
+                    // Decorative header — deliberately different from the reference image.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(112.dp)
+                            .clip(RoundedCornerShape(30.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(
+                                        MaterialTheme.colorScheme.primaryContainer,
+                                        MaterialTheme.colorScheme.secondaryContainer
+                                    )
+                                )
+                            )
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(118.dp)
+                                .offset(x = (-18).dp, y = (-30).dp)
+                                .clip(RoundedCornerShape(48.dp))
+                                .background(accent.copy(alpha = 0.16f))
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(86.dp)
+                                .align(Alignment.BottomEnd)
+                                .offset(x = 18.dp, y = 22.dp)
+                                .clip(RoundedCornerShape(36.dp))
+                                .background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.13f))
+                        )
+                        AnimatedContent(
+                            targetState = page,
+                            transitionSpec = {
+                                (fadeIn(tween(260)) + slideInVertically(tween(320)) { it / 4 }) togetherWith
+                                    (fadeOut(tween(180)) + slideOutVertically(tween(220)) { -it / 5 })
+                            },
+                            label = "firstLaunchHeader"
+                        ) { target ->
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                                Icon(
+                                    when (target) {
+                                        0 -> Icons.Filled.AutoAwesome
+                                        1 -> Icons.Filled.Lock
+                                        else -> Icons.Filled.Language
+                                    },
+                                    contentDescription = null,
+                                    tint = accent,
+                                    modifier = Modifier
+                                        .padding(start = 24.dp)
+                                        .size(42.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    AnimatedContent(
+                        targetState = page,
+                        transitionSpec = {
+                            (fadeIn(tween(280)) + slideInVertically(tween(360)) { it / 7 }) togetherWith
+                                (fadeOut(tween(160)) + slideOutVertically(tween(240)) { -it / 8 })
+                        },
+                        label = "firstLaunchContent"
+                    ) { target ->
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                pageTitles[target],
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                pageSummaries[target],
+                                style = MaterialTheme.typography.bodyMedium,
+                                lineHeight = 22.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            when (target) {
+                                0 -> {
+                                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        FirstLaunchFeatureCard(Icons.Filled.AutoAwesome, stringResource(R.string.first_launch_feature_local_title), stringResource(R.string.first_launch_feature_local_body))
+                                        FirstLaunchFeatureCard(Icons.Filled.Verified, stringResource(R.string.first_launch_feature_open_title), stringResource(R.string.first_launch_feature_open_body))
+                                    }
+                                }
+                                1 -> {
+                                    Surface(
+                                        shape = RoundedCornerShape(28.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+                                    ) {
+                                        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                            Text(stringResource(R.string.privacy_dialog_message), style = MaterialTheme.typography.bodyMedium, lineHeight = 22.sp)
+                                            Text(stringResource(R.string.first_launch_privacy_local_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 20.sp)
+                                        }
+                                    }
+                                }
+                                else -> {
+                                    val languages = listOf(
+                                        "system" to stringResource(R.string.settings_language_system),
+                                        "zh" to stringResource(R.string.settings_language_zh),
+                                        "zh-rTW" to stringResource(R.string.settings_language_zh_rTW),
+                                        "en" to stringResource(R.string.settings_language_en),
+                                        "ja" to stringResource(R.string.settings_language_ja),
+                                        "ko" to stringResource(R.string.settings_language_ko),
+                                        "ru" to stringResource(R.string.settings_language_ru)
+                                    )
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        languages.forEach { (code, label) ->
+                                            val selected = code == currentLanguage
+                                            Surface(
+                                                onClick = { onLanguageChange(code) },
+                                                shape = RoundedCornerShape(20.dp),
+                                                color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                                border = if (selected) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.16f))
+                                            ) {
+                                                Row(
+                                                    Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                                ) {
+                                                    Text(label, Modifier.weight(1f), fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+                                                    if (selected) Icon(Icons.Filled.Check, null, tint = accent, modifier = Modifier.size(20.dp))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        repeat(3) { index ->
+                            val selected = index == page
+                            val width by animateDpAsState(if (selected) 26.dp else 7.dp, spring(stiffness = 700f, dampingRatio = 0.8f), label = "launchDot")
+                            Box(
+                                Modifier
+                                    .padding(horizontal = 4.dp)
+                                    .width(width)
+                                    .height(7.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(if (selected) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f))
+                            )
+                        }
+                    }
+
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (page > 0) {
+                            OutlinedButton(
+                                onClick = { page-- },
+                                shape = RoundedCornerShape(22.dp),
+                                modifier = Modifier.height(52.dp)
+                            ) { Icon(Icons.Filled.ArrowBack, null) }
+                        }
+                        Button(
+                            onClick = {
+                                when (page) {
+                                    0 -> page = 1
+                                    1 -> {
+                                        onPrivacyAgree()
+                                        page = 2
+                                    }
+                                    else -> onComplete()
+                                }
+                            },
+                            shape = RoundedCornerShape(22.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(52.dp)
+                        ) {
+                            Text(
+                                when (page) {
+                                    0 -> stringResource(R.string.first_launch_next)
+                                    1 -> stringResource(R.string.first_launch_privacy_agree_continue)
+                                    else -> stringResource(R.string.welcome_dialog_enter)
+                                },
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Icon(Icons.Filled.KeyboardArrowRight, null)
+                        }
+                    }
+                    if (page == 1) {
+                        TextButton(onClick = onDisagree, modifier = Modifier.align(Alignment.End)) {
+                            Text(stringResource(R.string.privacy_dialog_disagree), color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FirstLaunchFeatureCard(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, body: String) {
+    Surface(
+        shape = RoundedCornerShape(26.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Box(
+                Modifier.size(46.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp)) }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(title, fontWeight = FontWeight.Bold)
+                Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 18.sp)
+            }
+        }
+    }
+}
+
+@Composable
 fun IntroDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
     AlertDialog(
@@ -8160,15 +8385,6 @@ fun CompareModelsDialog(
                                         Spacer(Modifier.width(6.dp))
                                         Text(stringResource(R.string.translate_tags))
                                     }
-                                    OutlinedButton(
-                                        onClick = onCopyOptimized,
-                                        shape = RoundedCornerShape(16.dp),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(stringResource(R.string.compare_copy))
-                                    }
                                 }
                             }
                         }
@@ -8786,17 +9002,6 @@ fun BatchProgressDialog(
                                     )
                                 }
                             }
-                            if (item.success && item.tags.isNotEmpty()) {
-                                IconButton(
-                                    onClick = {
-                                        copyTextToClipboard(context, item.tags.toTagText(), "batch_result")
-                                        Toast.makeText(context, context.getString(R.string.copied_toast), Toast.LENGTH_SHORT).show()
-                                    },
-                                    modifier = Modifier.size(32.dp).clip(RoundedCornerShape(10.dp))
-                                ) {
-                                    Icon(Icons.Filled.ContentCopy, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                                }
-                            }
                         }
                     }
                 }
@@ -8805,17 +9010,6 @@ fun BatchProgressDialog(
         confirmButton = {
             if (!isRunning) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (successCount > 0) {
-                        TextButton(onClick = {
-                            val allTags = results.filter { it.success }.flatMap { it.tags }.toTagText()
-                            copyTextToClipboard(context, allTags, "batch_all")
-                            Toast.makeText(context, context.getString(R.string.batch_copied_all, successCount), Toast.LENGTH_LONG).show()
-                        }) {
-                            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text(stringResource(R.string.batch_copy_all), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
                     TextButton(onClick = onDismiss) { Text(stringResource(R.string.settings_close), maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
             } else {

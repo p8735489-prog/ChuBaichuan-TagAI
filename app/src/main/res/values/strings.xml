@@ -537,4 +537,15 @@
     <string name="privacy_dialog_message">We take your privacy seriously. Although we provide online services, they require your consent before activation.</string>
     <string name="privacy_dialog_disagree">Disagree</string>
     <string name="privacy_dialog_agree">Agree</string>
+
+    <string name="first_launch_welcome_summary">Local Cue Word is a local-first tag workspace. Recognize images, refine tags, and keep your workflow on your device.</string>
+    <string name="first_launch_feature_local_title">Local-first recognition</string>
+    <string name="first_launch_feature_local_body">Your selected model runs locally whenever supported, without making your image a remote dependency.</string>
+    <string name="first_launch_feature_open_title">Open and controllable</string>
+    <string name="first_launch_feature_open_body">Models, settings, history, and privacy controls stay visible and manageable in the app.</string>
+    <string name="first_launch_privacy_summary">Privacy comes first. We keep the first-run explanation short and make the important choice explicit.</string>
+    <string name="first_launch_privacy_local_note">Local recognition does not mean every optional feature is offline. Features that need network access are kept separate and can be reviewed in Settings.</string>
+    <string name="first_launch_next">Next</string>
+    <string name="first_launch_privacy_agree_continue">Agree &amp; continue</string>
+
 </resources>
