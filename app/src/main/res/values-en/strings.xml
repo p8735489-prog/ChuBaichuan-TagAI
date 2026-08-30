@@ -329,6 +329,7 @@
     <string name="welcome_share_now">Share Now</string>
     <string name="footer_author">Author</string>
     <string name="footer_sponsor">Sponsor</string>
+    <string name="footer_website">Website</string>
     <string name="author_dialog_title">Author Video Platforms</string>
     <string name="author_platforms_hint">Author social media accounts</string>
     <string name="author_douyin">Douyin</string>

@@ -349,6 +349,7 @@
     <string name="welcome_share_now">立即分享</string>
     <string name="footer_author">作者</string>
     <string name="footer_sponsor">贊助</string>
+    <string name="footer_website">官方網站</string>
     <string name="author_dialog_title">作者影片平台</string>
     <string name="author_platforms_hint">作者的各平台帳號</string>
     <string name="author_douyin">抖音</string>

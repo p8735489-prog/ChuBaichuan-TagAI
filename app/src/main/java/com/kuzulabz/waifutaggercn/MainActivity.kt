@@ -113,6 +113,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Close
@@ -290,6 +291,7 @@ private const val BASE_EXP_GAIN = 100
 private const val MIN_RELIABLE_COLOR_BODY_PART_SCORE = 0.75f
 private const val AI_MODEL_NAME = "WD14 v3"
 private const val PROJECT_URL = "https://github.com/p8735489-prog/ChuBaichuan-TagAI"
+private const val WEBSITE_URL = "https://haobai.us.ci/"
 private const val QQ_GROUP_URL = "https://qm.qq.com/q/6jViPcR9le"
 private const val TELEGRAM_URL = "https://t.me/Local_Cue_Word"
 private const val SPONSOR_URL = "https://www.ifdian.net/a/cubaicuan"
@@ -1199,7 +1201,8 @@ private fun customBackgroundMainColorOptions() = setOf(
 
 private fun normalizeLanguageOption(option: String): String {
     return when (option) {
-        "system", "zh", "zh-rTW", "en", "ru", "ja", "ko" -> option
+        "system", "zh", "zh-rTW", "en", "ru", "ja", "ko",
+        "de", "fr", "es", "pt", "id", "vi", "th", "ar", "hi" -> option
         else -> "system"
     }
 }
@@ -1213,6 +1216,15 @@ private fun createLocalizedContext(context: Context, option: String): Context {
             "ru" -> Locale("ru")
             "ja" -> Locale.JAPANESE
             "ko" -> Locale.KOREAN
+            "de" -> Locale.GERMAN
+            "fr" -> Locale.FRENCH
+            "es" -> Locale("es")
+            "pt" -> Locale("pt")
+            "id" -> Locale("id")
+            "vi" -> Locale("vi")
+            "th" -> Locale("th")
+            "ar" -> Locale("ar")
+            "hi" -> Locale("hi")
             "system" -> resolveSystemLocale()
             else -> return context
         }
@@ -1234,6 +1246,15 @@ private fun languageTagForOption(option: String): String {
         "ru" -> "ru"
         "ja" -> "ja"
         "ko" -> "ko"
+        "de" -> "de"
+        "fr" -> "fr"
+        "es" -> "es"
+        "pt" -> "pt"
+        "id" -> "id"
+        "vi" -> "vi"
+        "th" -> "th"
+        "ar" -> "ar"
+        "hi" -> "hi"
         else -> ""
     }
 }
@@ -4268,6 +4289,14 @@ fun TaggerScreen(
                         }
                     )
                     FooterLinkButton(
+                        icon = Icons.Filled.Public,
+                        label = stringResource(R.string.footer_website),
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(WEBSITE_URL)))
+                        }
+                    )
+                    FooterLinkButton(
                         icon = Icons.Filled.Favorite,
                         label = stringResource(R.string.footer_sponsor),
                         modifier = Modifier.weight(1f),
@@ -7065,18 +7094,36 @@ fun FirstLaunchFlowDialog(
             }
         )
     }
+    val languages = listOf(
+        "system" to stringResource(R.string.settings_language_system),
+        "zh" to stringResource(R.string.settings_language_zh),
+        "zh-rTW" to stringResource(R.string.settings_language_zh_rTW),
+        "en" to stringResource(R.string.settings_language_en),
+        "ja" to stringResource(R.string.settings_language_ja),
+        "ko" to stringResource(R.string.settings_language_ko),
+        "ru" to stringResource(R.string.settings_language_ru),
+        "de" to stringResource(R.string.settings_language_de),
+        "fr" to stringResource(R.string.settings_language_fr),
+        "es" to stringResource(R.string.settings_language_es),
+        "pt" to stringResource(R.string.settings_language_pt),
+        "id" to stringResource(R.string.settings_language_id),
+        "vi" to stringResource(R.string.settings_language_vi),
+        "th" to stringResource(R.string.settings_language_th),
+        "ar" to stringResource(R.string.settings_language_ar),
+        "hi" to stringResource(R.string.settings_language_hi)
+    )
     val pageTitles = listOf(
-        stringResource(R.string.welcome_dialog_title),
+        stringResource(R.string.language_select_title),
         stringResource(R.string.privacy_dialog_title),
-        stringResource(R.string.language_select_title)
+        stringResource(R.string.welcome_dialog_title)
     )
     val pageSummaries = listOf(
-        stringResource(R.string.first_launch_welcome_summary),
+        stringResource(R.string.language_select_message),
         stringResource(R.string.first_launch_privacy_summary),
-        stringResource(R.string.language_select_message)
+        stringResource(R.string.first_launch_welcome_summary)
     )
     val accent = MaterialTheme.colorScheme.primary
-    val surface = MaterialTheme.colorScheme.surface
+
     Dialog(
         onDismissRequest = {},
         properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false, dismissOnClickOutside = false)
@@ -7085,197 +7132,139 @@ fun FirstLaunchFlowDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.34f))
-                .padding(horizontal = 18.dp, vertical = 28.dp)
+                .padding(horizontal = 16.dp, vertical = 20.dp)
         ) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .align(Alignment.Center)
-                    .clip(RoundedCornerShape(38.dp)),
-                color = surface,
+                    .fillMaxHeight(0.94f)
+                    .align(Alignment.Center),
+                shape = RoundedCornerShape(36.dp),
+                color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 8.dp,
                 shadowElevation = 18.dp
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(18.dp)
-                ) {
-                    // Decorative header — deliberately different from the reference image.
+                Column(Modifier.fillMaxSize().padding(22.dp)) {
+                    // A bespoke large-radius header: inspired by modern cards, not copied from the reference.
                     Box(
-                        modifier = Modifier
+                        Modifier
                             .fillMaxWidth()
-                            .height(112.dp)
+                            .height(104.dp)
                             .clip(RoundedCornerShape(30.dp))
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(
-                                        MaterialTheme.colorScheme.primaryContainer,
-                                        MaterialTheme.colorScheme.secondaryContainer
-                                    )
-                                )
-                            )
+                            .background(Brush.linearGradient(listOf(
+                                MaterialTheme.colorScheme.primaryContainer,
+                                MaterialTheme.colorScheme.secondaryContainer
+                            )))
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(118.dp)
-                                .offset(x = (-18).dp, y = (-30).dp)
-                                .clip(RoundedCornerShape(48.dp))
-                                .background(accent.copy(alpha = 0.16f))
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(86.dp)
-                                .align(Alignment.BottomEnd)
-                                .offset(x = 18.dp, y = 22.dp)
-                                .clip(RoundedCornerShape(36.dp))
-                                .background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.13f))
-                        )
+                        Box(Modifier.size(116.dp).offset((-20).dp, (-34).dp).clip(RoundedCornerShape(48.dp)).background(accent.copy(alpha = .14f)))
+                        Box(Modifier.size(78.dp).align(Alignment.BottomEnd).offset(18.dp, 20.dp).clip(RoundedCornerShape(32.dp)).background(MaterialTheme.colorScheme.tertiary.copy(alpha = .14f)))
                         AnimatedContent(
                             targetState = page,
                             transitionSpec = {
-                                (fadeIn(tween(260)) + slideInVertically(tween(320)) { it / 4 }) togetherWith
-                                    (fadeOut(tween(180)) + slideOutVertically(tween(220)) { -it / 5 })
-                            },
-                            label = "firstLaunchHeader"
+                                (fadeIn(tween(240)) + slideInVertically(tween(300)) { it / 5 }) togetherWith
+                                    (fadeOut(tween(160)) + slideOutVertically(tween(220)) { -it / 6 })
+                            }, label = "firstLaunchHeader"
                         ) { target ->
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                            Row(Modifier.fillMaxSize().padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    when (target) {
-                                        0 -> Icons.Filled.AutoAwesome
-                                        1 -> Icons.Filled.Lock
-                                        else -> Icons.Filled.Language
-                                    },
+                                    when (target) { 0 -> Icons.Filled.Language; 1 -> Icons.Filled.Lock; else -> Icons.Filled.AutoAwesome },
                                     contentDescription = null,
                                     tint = accent,
-                                    modifier = Modifier
-                                        .padding(start = 24.dp)
-                                        .size(42.dp)
+                                    modifier = Modifier.size(40.dp)
                                 )
+                                Spacer(Modifier.width(14.dp))
+                                Text(pageTitles[target], style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
                             }
                         }
                     }
 
+                    Spacer(Modifier.height(16.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        repeat(3) { index ->
+                            val selected = index == page
+                            val width by animateDpAsState(
+                                if (selected) 28.dp else 7.dp,
+                                spring(stiffness = 650f, dampingRatio = 0.82f),
+                                label = "launchDot"
+                            )
+                            Box(Modifier.padding(horizontal = 4.dp).width(width).height(7.dp).clip(RoundedCornerShape(99.dp)).background(if (selected) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = .18f)))
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+
                     AnimatedContent(
                         targetState = page,
                         transitionSpec = {
-                            (fadeIn(tween(280)) + slideInVertically(tween(360)) { it / 7 }) togetherWith
-                                (fadeOut(tween(160)) + slideOutVertically(tween(240)) { -it / 8 })
-                        },
-                        label = "firstLaunchContent"
+                            (fadeIn(tween(250)) + slideInVertically(tween(320)) { it / 8 }) togetherWith
+                                (fadeOut(tween(150)) + slideOutVertically(tween(220)) { -it / 10 })
+                        }, label = "firstLaunchContent"
                     ) { target ->
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(
-                                pageTitles[target],
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                pageSummaries[target],
-                                style = MaterialTheme.typography.bodyMedium,
-                                lineHeight = 22.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        Column(
+                            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(pageSummaries[target], style = MaterialTheme.typography.bodyMedium, lineHeight = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             when (target) {
                                 0 -> {
-                                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                        FirstLaunchFeatureCard(Icons.Filled.AutoAwesome, stringResource(R.string.first_launch_feature_local_title), stringResource(R.string.first_launch_feature_local_body))
-                                        FirstLaunchFeatureCard(Icons.Filled.Verified, stringResource(R.string.first_launch_feature_open_title), stringResource(R.string.first_launch_feature_open_body))
+                                    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                                        languages.chunked(2).forEach { row ->
+                                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                                                row.forEach { (code, label) ->
+                                                    val selected = code == currentLanguage
+                                                    Surface(
+                                                        onClick = { onLanguageChange(code) },
+                                                        modifier = Modifier.weight(1f),
+                                                        shape = RoundedCornerShape(20.dp),
+                                                        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .52f),
+                                                        border = if (selected) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .14f))
+                                                    ) {
+                                                        Row(Modifier.padding(horizontal = 13.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                            Text(label, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+                                                            if (selected) Icon(Icons.Filled.Check, null, tint = accent, modifier = Modifier.size(19.dp))
+                                                        }
+                                                    }
+                                                }
+                                                if (row.size == 1) Spacer(Modifier.weight(1f))
+                                            }
+                                        }
                                     }
                                 }
                                 1 -> {
-                                    Surface(
-                                        shape = RoundedCornerShape(28.dp),
-                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
-                                    ) {
-                                        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .72f)) {
+                                        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
                                             Text(stringResource(R.string.privacy_dialog_message), style = MaterialTheme.typography.bodyMedium, lineHeight = 22.sp)
                                             Text(stringResource(R.string.first_launch_privacy_local_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 20.sp)
                                         }
                                     }
                                 }
                                 else -> {
-                                    val languages = listOf(
-                                        "system" to stringResource(R.string.settings_language_system),
-                                        "zh" to stringResource(R.string.settings_language_zh),
-                                        "zh-rTW" to stringResource(R.string.settings_language_zh_rTW),
-                                        "en" to stringResource(R.string.settings_language_en),
-                                        "ja" to stringResource(R.string.settings_language_ja),
-                                        "ko" to stringResource(R.string.settings_language_ko),
-                                        "ru" to stringResource(R.string.settings_language_ru)
-                                    )
-                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        languages.forEach { (code, label) ->
-                                            val selected = code == currentLanguage
-                                            Surface(
-                                                onClick = { onLanguageChange(code) },
-                                                shape = RoundedCornerShape(20.dp),
-                                                color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                                                border = if (selected) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.16f))
-                                            ) {
-                                                Row(
-                                                    Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                                ) {
-                                                    Text(label, Modifier.weight(1f), fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
-                                                    if (selected) Icon(Icons.Filled.Check, null, tint = accent, modifier = Modifier.size(20.dp))
-                                                }
-                                            }
-                                        }
-                                    }
+                                    FirstLaunchFeatureCard(Icons.Filled.AutoAwesome, stringResource(R.string.first_launch_feature_local_title), stringResource(R.string.first_launch_feature_local_body))
+                                    FirstLaunchFeatureCard(Icons.Filled.Verified, stringResource(R.string.first_launch_feature_open_title), stringResource(R.string.first_launch_feature_open_body))
                                 }
                             }
                         }
                     }
 
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        repeat(3) { index ->
-                            val selected = index == page
-                            val width by animateDpAsState(if (selected) 26.dp else 7.dp, spring(stiffness = 700f, dampingRatio = 0.8f), label = "launchDot")
-                            Box(
-                                Modifier
-                                    .padding(horizontal = 4.dp)
-                                    .width(width)
-                                    .height(7.dp)
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(if (selected) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f))
-                            )
-                        }
-                    }
-
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
+                    Spacer(Modifier.height(12.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         if (page > 0) {
-                            OutlinedButton(
-                                onClick = { page-- },
-                                shape = RoundedCornerShape(22.dp),
-                                modifier = Modifier.height(52.dp)
-                            ) { Icon(Icons.Filled.ArrowBack, null) }
+                            OutlinedButton(onClick = { page-- }, shape = RoundedCornerShape(22.dp), modifier = Modifier.height(52.dp)) {
+                                Icon(Icons.Filled.ArrowBack, null)
+                            }
                         }
                         Button(
                             onClick = {
                                 when (page) {
-                                    0 -> page = 1
-                                    1 -> {
-                                        onPrivacyAgree()
-                                        page = 2
+                                    0 -> {
+                                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putBoolean(KEY_LANGUAGE_SELECTED, true).apply()
+                                        page = 1
                                     }
+                                    1 -> { onPrivacyAgree(); page = 2 }
                                     else -> onComplete()
                                 }
                             },
                             shape = RoundedCornerShape(22.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(52.dp)
+                            modifier = Modifier.weight(1f).height(52.dp)
                         ) {
                             Text(
                                 when (page) {
@@ -7283,7 +7272,9 @@ fun FirstLaunchFlowDialog(
                                     1 -> stringResource(R.string.first_launch_privacy_agree_continue)
                                     else -> stringResource(R.string.welcome_dialog_enter)
                                 },
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Spacer(Modifier.width(6.dp))
                             Icon(Icons.Filled.KeyboardArrowRight, null)
@@ -7455,7 +7446,16 @@ fun LanguageSelectDialog(
                     "en" to stringResource(R.string.settings_language_en),
                     "ja" to stringResource(R.string.settings_language_ja),
                     "ko" to stringResource(R.string.settings_language_ko),
-                    "ru" to stringResource(R.string.settings_language_ru)
+                    "ru" to stringResource(R.string.settings_language_ru),
+                    "de" to stringResource(R.string.settings_language_de),
+                    "fr" to stringResource(R.string.settings_language_fr),
+                    "es" to stringResource(R.string.settings_language_es),
+                    "pt" to stringResource(R.string.settings_language_pt),
+                    "id" to stringResource(R.string.settings_language_id),
+                    "vi" to stringResource(R.string.settings_language_vi),
+                    "th" to stringResource(R.string.settings_language_th),
+                    "ar" to stringResource(R.string.settings_language_ar),
+                    "hi" to stringResource(R.string.settings_language_hi)
                 )
                 // 使用两列网格布局
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

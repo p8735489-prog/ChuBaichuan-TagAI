@@ -308,6 +308,7 @@
     <string name="welcome_share_now">مشاركة الآن</string>
     <string name="footer_author">المؤلف</string>
     <string name="footer_sponsor">الراعي</string>
+    <string name="footer_website">الموقع</string>
     <string name="author_dialog_title">منصات فيديو المؤلف</string>
     <string name="author_platforms_hint">حسابات وسائل التواصل الاجتماعي للمؤلف</string>
     <string name="author_douyin">دويتين</string>
@@ -518,4 +519,9 @@
     <string name="workflow_seg_model_status_format">Current: %1$s · %2$s · Total %3$d</string>
     <string name="model_status_loaded">Loaded</string>
     <string name="model_status_not_loaded">Not loaded</string>
+
+    <string name="privacy_dialog_title">Privacy Protection Statement</string>
+    <string name="privacy_dialog_message">We take your privacy seriously. Although we provide online services, they require your consent before activation.</string>
+    <string name="privacy_dialog_disagree">Disagree</string>
+    <string name="privacy_dialog_agree">Agree</string>
 </resources>

@@ -309,6 +309,7 @@
     <string name="welcome_share_now">Поделиться</string>
     <string name="footer_author">Автор</string>
     <string name="footer_sponsor">Спонсор</string>
+    <string name="footer_website">Сайт</string>
     <string name="author_dialog_title">Видеоплатформы автора</string>
     <string name="author_platforms_hint">Социальные сети автора</string>
     <string name="author_douyin">Douyin</string>

@@ -376,6 +376,7 @@
     <string name="welcome_share_now">立即分享</string>
     <string name="footer_author">作者</string>
     <string name="footer_sponsor">赞助</string>
+    <string name="footer_website">官网</string>
     <string name="author_dialog_title">作者视频平台</string>
     <string name="author_platforms_hint">作者的各平台账号</string>
     <string name="author_douyin">抖音</string>
@@ -553,4 +554,7 @@
     <string name="first_launch_privacy_local_note">本地识别并不代表所有可选功能都完全离线。需要联网的功能会保持独立，并可在设置中查看和管理。</string>
     <string name="first_launch_next">下一步</string>
 
+
+    <string name="settings_subtitle_poetry_notice_reject">Don\'t enable</string>
+    <string name="translate_network_notice_reject">Don\'t use</string>
 </resources>

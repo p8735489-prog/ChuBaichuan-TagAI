@@ -309,6 +309,7 @@
     <string name="welcome_share_now">지금 공유</string>
     <string name="footer_author">작가</string>
     <string name="footer_sponsor">후원</string>
+    <string name="footer_website">공식 웹사이트</string>
     <string name="author_dialog_title">작가 영상 플랫폼</string>
     <string name="author_platforms_hint">작가의 SNS 계정</string>
     <string name="author_douyin">더우인</string>

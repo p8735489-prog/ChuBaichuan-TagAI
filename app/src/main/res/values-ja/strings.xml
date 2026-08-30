@@ -309,6 +309,7 @@
     <string name="welcome_share_now">今すぐ共有</string>
     <string name="footer_author">作者</string>
     <string name="footer_sponsor">スポンサー</string>
+    <string name="footer_website">公式サイト</string>
     <string name="author_dialog_title">作者動画プラットフォーム</string>
     <string name="author_platforms_hint">作者のSNSアカウント</string>
     <string name="author_douyin">抖音</string>
