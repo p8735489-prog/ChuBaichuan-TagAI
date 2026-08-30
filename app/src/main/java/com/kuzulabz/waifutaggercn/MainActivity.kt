@@ -3153,7 +3153,7 @@ fun TaggerScreen(
                     ) {
                         Column(
                             modifier = Modifier.padding(top = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                            verticalArrangement = Arrangement.spacedBy(9.dp)
                         ) {
                             // 标签模型选择
                             Text(
@@ -3793,7 +3793,8 @@ fun TaggerScreen(
                 AutoPromptWriterCard(
                     promptDraft = autoPromptDraft,
                     isTranslating = isTranslating,
-                    onTranslate = openTranslateWithNotice
+                    onTranslate = openTranslateWithNotice,
+                    onCopyTags = { copyTagsToClipboard(context, limitedTags) }
                 )
             }
 
@@ -3853,44 +3854,23 @@ fun TaggerScreen(
             }
             }
 
-            // 主结果操作：紧跟标签列表，避免按钮与反向词/模型推荐卡片之间产生过大的视觉断层。
+            // 分享入口单独占满原双按钮区域；复制tag只保留在自动提示词卡片底部。
             AnimatedVisibility(visible = tags.isNotEmpty()) {
-                Row(
+                OutlinedButton(
+                    onClick = { shareTags(context, limitedTags) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    shape = RoundedCornerShape(20.dp),
+                    contentPadding = PaddingValues(horizontal = 18.dp)
                 ) {
-                    Button(
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        contentPadding = PaddingValues(horizontal = 12.dp),
-                        onClick = { copyTagsToClipboard(context, limitedTags) }
-                    ) {
-                        Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            stringResource(R.string.copy_tags),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    OutlinedButton(
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        contentPadding = PaddingValues(horizontal = 12.dp),
-                        onClick = { shareTags(context, limitedTags) }
-                    ) {
-                        Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            stringResource(R.string.share_tags),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                    Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        stringResource(R.string.share_tags),
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
                 }
             }
 
@@ -5012,7 +4992,8 @@ private fun PixelSegmentedProgressBar(
 fun AutoPromptWriterCard(
     promptDraft: AutoPromptDraft,
     isTranslating: Boolean,
-    onTranslate: () -> Unit
+    onTranslate: () -> Unit,
+    onCopyTags: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(22.dp),
@@ -5070,6 +5051,31 @@ fun AutoPromptWriterCard(
             AutoPromptCategoryRow(stringResource(R.string.auto_prompt_appearance), promptDraft.appearance)
             AutoPromptCategoryRow(stringResource(R.string.auto_prompt_scene), promptDraft.scene)
             AutoPromptCategoryRow(stringResource(R.string.auto_prompt_action), promptDraft.action)
+
+            // 唯一的复制入口：固定放在自动提示词/分类卡片底部，避免与分享按钮挤在一起。
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Button(
+                    onClick = onCopyTags,
+                    modifier = Modifier.height(44.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    contentPadding = PaddingValues(horizontal = 18.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.ContentCopy,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        stringResource(R.string.copy_tags),
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                }
+            }
         }
     }
 }
@@ -7120,19 +7126,20 @@ fun FirstLaunchFlowDialog(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.90f)
+                    .wrapContentHeight()
+                    .heightIn(max = 700.dp)
                     .align(Alignment.Center),
                 shape = RoundedCornerShape(36.dp),
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 8.dp,
                 shadowElevation = 18.dp
             ) {
-                Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 18.dp)) {
+                Column(Modifier.wrapContentHeight().padding(horizontal = 20.dp, vertical = 14.dp)) {
                     // A bespoke large-radius header: inspired by modern cards, not copied from the reference.
                     Box(
                         Modifier
                             .fillMaxWidth()
-                            .height(88.dp)
+                            .height(72.dp)
                             .clip(RoundedCornerShape(30.dp))
                             .background(Brush.linearGradient(listOf(
                                 MaterialTheme.colorScheme.primaryContainer,
@@ -7183,8 +7190,11 @@ fun FirstLaunchFlowDialog(
                         }, label = "firstLaunchContent"
                     ) { target ->
                         Column(
-                            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 120.dp, max = 390.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(9.dp)
                         ) {
                             Text(pageSummaries[target], style = MaterialTheme.typography.bodyMedium, lineHeight = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             when (target) {
@@ -7280,14 +7290,14 @@ private fun FirstLaunchFeatureCard(icon: androidx.compose.ui.graphics.vector.Ima
         shape = RoundedCornerShape(26.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
     ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Box(
-                Modifier.size(46.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.primaryContainer),
+                Modifier.size(40.dp).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.primaryContainer),
                 contentAlignment = Alignment.Center
-            ) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp)) }
+            ) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp)) }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(title, fontWeight = FontWeight.Bold)
-                Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 18.sp)
+                Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 17.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
         }
     }
