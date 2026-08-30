@@ -3785,17 +3785,21 @@ fun TaggerScreen(
                 }
             }
 
-            AnimatedVisibility(
-                visible = tags.isNotEmpty(),
-                enter = fadeIn(tween(200)),
-                exit = fadeOut(tween(100))
-            ) {
-                AutoPromptWriterCard(
-                    promptDraft = autoPromptDraft,
-                    isTranslating = isTranslating,
-                    onTranslate = openTranslateWithNotice,
-                    onCopyTags = { copyTagsToClipboard(context, limitedTags) }
-                )
+            // 识别页专属：自动提示词/反向词/模型推荐只属于识别结果，
+            // 不在记录、模型、设置页面重复显示。
+            if (tab == 0) {
+                AnimatedVisibility(
+                    visible = tags.isNotEmpty(),
+                    enter = fadeIn(tween(200)),
+                    exit = fadeOut(tween(100))
+                ) {
+                    AutoPromptWriterCard(
+                        promptDraft = autoPromptDraft,
+                        isTranslating = isTranslating,
+                        onTranslate = openTranslateWithNotice,
+                        onCopyTags = { copyTagsToClipboard(context, limitedTags) }
+                    )
+                }
             }
 
             AnimatedVisibility(
@@ -3874,25 +3878,45 @@ fun TaggerScreen(
                 }
             }
 
-            AnimatedVisibility(
-                visible = tags.isNotEmpty(),
-                enter = fadeIn(tween(200)),
-                exit = fadeOut(tween(100))
-            ) {
-                NegativePromptCard(
-                    negativePrompt = negativePrompt
-                )
-            }
+            if (tab == 0) {
+                AnimatedVisibility(
+                    visible = tags.isNotEmpty(),
+                    enter = fadeIn(tween(200)),
+                    exit = fadeOut(tween(100))
+                ) {
+                    NegativePromptCard(
+                        negativePrompt = negativePrompt,
+                        onCopyNegativePrompt = {
+                            copyTextToClipboard(context, negativePrompt, "negative_prompt")
+                        }
+                    )
+                }
 
-            AnimatedVisibility(
-                visible = tags.isNotEmpty(),
-                enter = fadeIn(tween(200)),
-                exit = fadeOut(tween(100))
-            ) {
-                ModelRecommendationCard(
-                    detectionResult = detectionResult,
-                    recommendedModels = recommendedModels
-                )
+                AnimatedVisibility(
+                    visible = tags.isNotEmpty(),
+                    enter = fadeIn(tween(200)),
+                    exit = fadeOut(tween(100))
+                ) {
+                    ModelRecommendationCard(
+                        detectionResult = detectionResult,
+                        recommendedModels = recommendedModels
+                    )
+                }
+
+                // 设备状态同样只属于识别页，不在记录/模型/设置页重复占用空间。
+                AnimatedVisibility(visible = tags.isNotEmpty()) {
+                    val hasTaggerModel = aiModels.isNotEmpty() && engine.isReady
+                    val displayModelName = if (hasTaggerModel) selectedAiModelName else stringResource(R.string.ai_status_no_model)
+                    val installedDetEntry = installedDetectionEntries.firstOrNull { detModelName == "${it.repoName}.onnx" }
+                    val installedSegEntry = installedSegEntries.firstOrNull { segModelName == "${it.repoName}.onnx" }
+                    DeviceStatusCard(
+                        modelName = displayModelName,
+                        speedText = lastInferenceTimeMs?.let { formatInferenceSpeed(it) } ?: stringResource(R.string.ai_status_speed_empty),
+                        deviceName = getDeviceName(),
+                        detModelName = installedDetEntry?.name,
+                        segModelName = installedSegEntry?.name
+                    )
+                }
             }
 
             AnimatedVisibility(visible = tags.isEmpty() && !isRunning && bitmap != null) {
@@ -3937,20 +3961,6 @@ fun TaggerScreen(
             }
 
             if (tab == 1) {
-            // 判断模型是否实际安装：有可用 tagger 模型时显示名称，否则显示"未下载模型"
-            val hasTaggerModel = aiModels.isNotEmpty() && engine.isReady
-            val displayModelName = if (hasTaggerModel) selectedAiModelName else stringResource(R.string.ai_status_no_model)
-            // 检测/分割模型：仅在实际安装时显示
-            val installedDetEntry = installedDetectionEntries.firstOrNull { detModelName == "${it.repoName}.onnx" }
-            val installedSegEntry = installedSegEntries.firstOrNull { segModelName == "${it.repoName}.onnx" }
-            DeviceStatusCard(
-                modelName = displayModelName,
-                speedText = lastInferenceTimeMs?.let { formatInferenceSpeed(it) } ?: stringResource(R.string.ai_status_speed_empty),
-                deviceName = getDeviceName(),
-                detModelName = installedDetEntry?.name,
-                segModelName = installedSegEntry?.name
-            )
-
             TodayAnalysisCard(
                 stats = analysisStats
             )
@@ -5128,17 +5138,18 @@ private fun AutoPromptCategoryRow(
 
 @Composable
 fun NegativePromptCard(
-    negativePrompt: String
+    negativePrompt: String,
+    onCopyNegativePrompt: () -> Unit
 ) {
     Card(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(22.dp),
         colors = themedCardColors(),
         modifier = Modifier
             .fillMaxWidth()
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
                 stringResource(R.string.negative_prompt_title),
@@ -5152,6 +5163,30 @@ fun NegativePromptCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp
             )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Button(
+                    onClick = onCopyNegativePrompt,
+                    modifier = Modifier.height(44.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    contentPadding = PaddingValues(horizontal = 18.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.ContentCopy,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        stringResource(R.string.copy_negative_prompt),
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
         }
     }
 }
