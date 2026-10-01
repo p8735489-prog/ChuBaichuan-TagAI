@@ -1,0 +1,15 @@
+如果你是通过 GitHub Actions 云端构建（推荐，见根目录 GitHub Actions 自动化发布指南），
+不需要手动放这些文件——模型由 App 在首次使用时从 Hugging Face 在线下载
+（见 app/src/main/assets/models.json 的模型列表与 Hugging Face 仓库配置），
+云端构建与本地构建都不需要把它们打包进 APK。
+
+如果你是本地用 Android Studio 构建、并希望把模型预置进 APK，才需要手动在这个目录里放：
+
+1. model.onnx
+   一个 WD-tagger 系列的 ONNX 模型，例如 SmilingWolf 在 Hugging Face 上发布的
+   wd-convnext-tagger-v3（Apache-2.0 协议开源）。
+   去 https://huggingface.co/SmilingWolf/wd-convnext-tagger-v3 下载 model.onnx。
+
+2. selected_tags.csv
+   同一个仓库里的 selected_tags.csv，格式是：
+   tag_id,name,category,count

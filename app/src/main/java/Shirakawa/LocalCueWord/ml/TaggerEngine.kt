@@ -1,0 +1,1016 @@
+package Shirakawa.LocalCueWord.ml
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.os.Process
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
+import ai.onnxruntime.OrtSession.SessionOptions
+import Shirakawa.LocalCueWord.R
+import org.json.JSONArray
+import org.json.JSONObject
+import org.json.JSONTokener
+import Shirakawa.LocalCueWord.ml.adapters.TaggerAdapter
+import Shirakawa.LocalCueWord.ml.adapters.TaggerAdapterRegistry
+import java.io.BufferedReader
+import java.io.File
+import java.io.InputStreamReader
+import java.nio.FloatBuffer
+import kotlin.math.exp
+
+/**
+ * Wraps an ONNX Runtime session for a WD-tagger-style image tagging model.
+ *
+ * Expects two files in app/src/main/assets/, supplied by you (not bundled
+ * here):
+ *   - model.onnx           the tagger model, e.g. a WD14/WD-v3 ONNX export
+ *   - selected_tags.csv    header row + one row per class: id,name,category
+ *
+ * Compatibility mode tries common image tagger input variants automatically:
+ * NHWC / NCHW layout, RGB / BGR channel order, and 0-255 / 0-1 float range.
+ * It also flattens common ONNX output structures and can convert logits to probabilities.
+ */
+class TaggerEngine(private val context: Context) {
+
+    /**
+     * Inference performance mode: "power_saving" (big cores only),
+     * "performance" (big + super cores), or "auto" (system default).
+     */
+    var highPerformanceMode: String = "performance"
+
+    /** 互斥锁，防止 load() 和 tag() 并发导致 session 被关闭后仍被使用 */
+    private val lock = Any()
+
+    data class ModelConfig(
+        val id: String,
+        val displayName: String,
+        val modelFile: File? = null,
+        val tagsFile: File? = null,
+        val isBuiltIn: Boolean = false,
+        val supportedImageTypes: String = "anime"
+    )
+
+    data class Tag(
+        val name: String,
+        val category: Int,
+        val score: Float,
+        val originalScore: Float = score
+    )
+
+    private var session: OrtSession? = null
+    private var environment: OrtEnvironment? = null
+    private var tagNames: List<String> = emptyList()
+    private var tagCategories: List<Int> = emptyList()
+    private var inputName: String = "input"
+    private var inputLayout: InputLayout = InputLayout.NHWC
+    private var preferredPreprocessMode: PreprocessMode? = null
+    private var modelFamily: String = "generic"
+    private var modelAdapter: TaggerAdapter? = null
+    private var modelMean = floatArrayOf(0f, 0f, 0f)
+    private var modelStd = floatArrayOf(1f, 1f, 1f)
+    private var preserveAspect = false
+    var inputSize: Int = 448
+        private set
+    var currentModelName: String = "WD Tagger"
+        private set
+
+    val isReady: Boolean
+        get() = session != null && tagNames.isNotEmpty()
+
+    private enum class InputLayout { NHWC, NCHW }
+
+    private data class PreprocessMode(
+        val layout: InputLayout,
+        val rgb: Boolean,
+        val scaleToUnit: Boolean
+    )
+
+    private data class PreparedInput(
+        val buffer: FloatBuffer,
+        val shape: LongArray
+    )
+
+    companion object {
+        const val DEFAULT_MODEL_ID = "built_in_model"
+        private const val MODEL_DIR_NAME = "ai_models"
+
+        fun modelDirectory(context: Context): File {
+            return File(context.filesDir, MODEL_DIR_NAME).apply { mkdirs() }
+        }
+
+        fun builtInModelConfig(): ModelConfig {
+            return ModelConfig(
+                id = DEFAULT_MODEL_ID,
+                displayName = "assets/model.onnx",
+                isBuiltIn = true
+            )
+        }
+
+        /**
+         * 判断内置 assets/model.onnx 是否真的存在。
+         * APK 没有内置模型时，不应该把"内置模型"显示在列表里，否则会误导用户。
+         */
+        fun hasBuiltInModelAsset(context: Context): Boolean {
+            return try {
+                context.assets.open("model.onnx").use { stream ->
+                    stream.read() >= 0
+                }
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        fun scanModelConfigs(context: Context): List<ModelConfig> {
+            val modelDir = modelDirectory(context)
+            android.util.Log.d("TaggerEngine", "scanModelConfigs: dir=${modelDir.absolutePath}, exists=${modelDir.exists()}")
+            val allFiles = modelDir.listFiles()
+            android.util.Log.d("TaggerEngine", "scanModelConfigs: listFiles=${allFiles?.size ?: "null"} files")
+            allFiles?.forEach { f ->
+                android.util.Log.d("TaggerEngine", "  file: ${f.name} (${f.length()}B, ext=${f.extension})")
+            }
+            val tagFiles = allFiles
+                ?.filter { it.isFile && isSupportedTagFile(it) && it.length() > 0L }
+                ?.sortedBy { file ->
+                    tagFileSortKey(file)
+                }
+                .orEmpty()
+            val modelFiles = allFiles
+                ?.filter { it.isFile && it.extension.equals("onnx", ignoreCase = true) }
+                ?.sortedBy { it.name.lowercase() }
+                .orEmpty()
+            // 从目录加载模型类型映射
+            val catalog = ModelRegistry.loadCatalog(context)
+            val typeById = catalog.associateBy { it.id }
+            val typeByRepo = catalog.associateBy { it.repoName }
+
+            // ---- external data 模型：ai_models/{repoName}/model.onnx + model.onnx.data + tags.json ----
+            // 这类模型必须整目录成套出现，且 .onnx 保持原名 model.onnx（ORT 按 <onnx>.data 查找分片），
+            // 因此不能和扁平布局混在一起扫描，需要单独识别子目录。
+            val bundleModels = catalog
+                .filter { it.extraFiles.isNotEmpty() && it.category == ModelRegistry.ModelCategory.TAGGER }
+                .mapNotNull { entry ->
+                    val dir = File(modelDir, entry.repoName)
+                    val onnxFile = File(dir, "model.onnx")
+                    if (!onnxFile.isFile || onnxFile.length() == 0L) return@mapNotNull null
+                    // 分片缺失时直接跳过：加载必然失败，不如不暴露给用户
+                    val allExtrasPresent = entry.extraFiles.all { name ->
+                        val f = File(dir, name)
+                        f.isFile && f.length() > 0L
+                    }
+                    if (!allExtrasPresent) {
+                        android.util.Log.w("TaggerEngine", "跳过 ${entry.id}：external data 分片缺失 ${dir.absolutePath}")
+                        return@mapNotNull null
+                    }
+                    val tagsFile = dir.listFiles()
+                        ?.filter { it.isFile && isSupportedTagFile(it) && it.length() > 0L }
+                        ?.sortedBy { tagFileSortKey(it) }
+                        ?.firstOrNull { it.name.equals("tags.json", ignoreCase = true) }
+                        ?: dir.listFiles()
+                            ?.filter { it.isFile && isSupportedTagFile(it) && it.length() > 0L }
+                            ?.sortedBy { tagFileSortKey(it) }
+                            ?.firstOrNull()
+                    ModelConfig(
+                        id = entry.id,
+                        displayName = friendlyModelName(entry.repoName),
+                        modelFile = onnxFile,
+                        tagsFile = tagsFile,
+                        isBuiltIn = false,
+                        supportedImageTypes = entry.supportedImageTypes
+                    )
+                }
+
+            val customModels = allFiles
+                ?.filter { it.isFile && it.extension.equals("onnx", ignoreCase = true) }
+                ?.sortedBy { it.name.lowercase() }
+                ?.map { modelFile ->
+                    val sameNameTags = tagFiles.firstOrNull {
+                        it.nameWithoutExtension.equals(modelFile.nameWithoutExtension, ignoreCase = true)
+                    }
+                    val imgType = typeById[modelFile.nameWithoutExtension]?.supportedImageTypes
+                        ?: typeByRepo[modelFile.nameWithoutExtension]?.supportedImageTypes
+                        ?: "anime"
+                    ModelConfig(
+                        id = modelFile.nameWithoutExtension,
+                        displayName = friendlyModelName(modelFile.nameWithoutExtension),
+                        modelFile = modelFile,
+                        tagsFile = sameNameTags ?: findUnambiguousTagFile(modelFile, modelFiles, tagFiles),
+                        isBuiltIn = false,
+                        supportedImageTypes = imgType
+                    )
+                }
+                .orEmpty()
+            // 只有真的内置了 model.onnx 才显示"内置模型"，否则会误导用户
+            val builtIn = if (hasBuiltInModelAsset(context)) listOf(builtInModelConfig()) else emptyList()
+            return builtIn + bundleModels + customModels
+        }
+
+        private fun isSupportedTagFile(file: File): Boolean {
+            return file.extension.lowercase() in setOf("csv", "json", "txt")
+        }
+
+        private fun tagFileSortKey(file: File): String {
+            val name = file.name.lowercase()
+            return when (name) {
+                "selected_tags.csv" -> "00_$name"
+                "tags.json", "selected_tags.json", "classes.json", "labels.json" -> "01_$name"
+                "tags.txt", "selected_tags.txt", "classes.txt", "labels.txt" -> "02_$name"
+                else -> "10_$name"
+            }
+        }
+
+        private fun findUnambiguousTagFile(
+            modelFile: File,
+            modelFiles: List<File>,
+            tagFiles: List<File>
+        ): File? {
+            if (tagFiles.isEmpty()) return null
+            val modelKey = normalizePairingName(modelFile.nameWithoutExtension)
+            tagFiles.firstOrNull {
+                normalizePairingName(it.nameWithoutExtension) == modelKey
+            }?.let { return it }
+
+            // 只有“一个模型 + 一个标签表”时，才允许 selected_tags/tags 这种通用文件名自动配对。
+            // 多模型共用一个标签表很容易错配，错配后会把输出下标解释成错误标签，导致提示词乱生成。
+            if (modelFiles.size == 1 && tagFiles.size == 1) return tagFiles.first()
+            if (modelFiles.size == 1) {
+                return tagFiles.firstOrNull {
+                    it.nameWithoutExtension.equals("selected_tags", ignoreCase = true) ||
+                        it.nameWithoutExtension.equals("tags", ignoreCase = true) ||
+                        it.nameWithoutExtension.equals("classes", ignoreCase = true) ||
+                        it.nameWithoutExtension.equals("labels", ignoreCase = true)
+                }
+            }
+            return null
+        }
+
+        private fun normalizePairingName(name: String): String {
+            return name
+                .lowercase()
+                .replace(Regex("\\.(onnx|csv|json|txt)$"), "")
+                .replace(Regex("[^a-z0-9]+"), "")
+        }
+
+        private fun friendlyModelName(baseName: String): String {
+            return when (baseName.lowercase()) {
+                "wd-convnext-tagger-v3" -> "WD ConvNeXt Tagger v3"
+                "wd-swinv2-tagger-v3" -> "WD SwinV2 Tagger v3"
+                "wd-vit-tagger-v3" -> "WD ViT Tagger v3"
+                "wd-eva02-large-tagger-v3" -> "WD EVA02 Large Tagger v3"
+                else -> baseName
+                    .replace('_', ' ')
+                    .replace('-', ' ')
+                    .split(" ")
+                    .filter { it.isNotBlank() }
+                    .joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
+            }
+        }
+    }
+
+    private fun parseTagFile(file: File): List<Pair<String, Int>> {
+        return when (file.extension.lowercase()) {
+            "csv" -> parseCsvTagLines(file.readLines())
+            "txt" -> parseTxtTagLines(file.readLines())
+            "json" -> parseJsonTagText(file.readText())
+            else -> emptyList()
+        }
+    }
+
+    private fun parseCsvTagLines(lines: List<String>): List<Pair<String, Int>> {
+        val usefulLines = lines.filter { it.isNotBlank() }
+        if (usefulLines.isEmpty()) return emptyList()
+
+        val header = splitCsvLine(usefulLines.first()).map { it.trim().trim('\uFEFF').lowercase() }
+        val hasHeader = header.any { it in setOf("name", "tag", "label", "class", "caption", "category", "type", "tag_id", "id") }
+        val nameIndex = if (hasHeader) {
+            listOf("name", "tag", "label", "class", "caption")
+                .firstNotNullOfOrNull { key -> header.indexOf(key).takeIf { it >= 0 } }
+        } else null
+        val categoryIndex = if (hasHeader) {
+            listOf("category", "type")
+                .firstNotNullOfOrNull { key -> header.indexOf(key).takeIf { it >= 0 } }
+        } else null
+        val idIndex = if (hasHeader) {
+            listOf("tag_id", "id")
+                .firstNotNullOfOrNull { key -> header.indexOf(key).takeIf { it >= 0 } }
+        } else null
+        val dataLines = if (hasHeader) usefulLines.drop(1) else usefulLines
+
+        // 重要：不能因为 name 为空就跳过该行！每一行数据都对应 ONNX 输出的一个索引位置，
+        // 跳过行会导致后续所有标签错位。空名称用占位符保留位置。
+        return dataLines.mapIndexed { idx, line ->
+            val cols = splitCsvLine(line)
+            val name = when {
+                nameIndex != null && nameIndex < cols.size -> cols[nameIndex].trim()
+                cols.size >= 3 -> cols[1].trim()
+                cols.isNotEmpty() -> cols.last().trim()
+                else -> ""
+            }
+            val category = when {
+                categoryIndex != null && categoryIndex < cols.size -> cols[categoryIndex].trim().toIntOrNull() ?: 0
+                cols.size >= 3 -> cols[2].trim().toIntOrNull() ?: 0
+                else -> 0
+            }
+            // 跳过重复的 header 行（某些 CSV 可能有多个 header）
+            if (name.equals("name", ignoreCase = true)) {
+                "__dup_header_$idx" to category
+            } else if (name.isEmpty()) {
+                // 空名称标签（如 PixAI 的 tag_id=-1 占位符）：保留位置，用 id 或索引生成占位名
+                val idVal = if (idIndex != null && idIndex < cols.size) cols[idIndex].trim() else ""
+                val placeholder = if (idVal.isNotEmpty()) "__unused_${idVal}__" else "__unused_${idx}__"
+                android.util.Log.w("TaggerEngine", "CSV 第${idx+1}个标签名称为空(id=$idVal)，使用占位符 '$placeholder' 保持索引对齐")
+                placeholder to category
+            } else {
+                name to category
+            }
+        }
+    }
+
+    private fun splitCsvLine(line: String): List<String> {
+        val result = mutableListOf<String>()
+        val current = StringBuilder()
+        var inQuotes = false
+        var i = 0
+        while (i < line.length) {
+            val c = line[i]
+            when {
+                c == '"' && inQuotes && i + 1 < line.length && line[i + 1] == '"' -> {
+                    current.append('"')
+                    i += 1
+                }
+                c == '"' -> inQuotes = !inQuotes
+                c == ',' && !inQuotes -> {
+                    result.add(current.toString())
+                    current.clear()
+                }
+                else -> current.append(c)
+            }
+            i += 1
+        }
+        result.add(current.toString())
+        return result
+    }
+
+    private fun parseTxtTagLines(lines: List<String>): List<Pair<String, Int>> {
+        // 同样不能跳过空行导致索引错位，空行用占位符保留
+        return lines.mapIndexed { idx, line ->
+            val tag = line.trim()
+                .removePrefix("-")
+                .trim()
+                .substringBefore(",")
+                .substringBefore("\t")
+                .trim()
+            if (tag.isEmpty()) {
+                "__unused_txt_${idx}__" to 0
+            } else {
+                tag to 0
+            }
+        }
+    }
+
+    private fun parseJsonTagText(text: String): List<Pair<String, Int>> {
+        val root = JSONTokener(text).nextValue()
+        return when (root) {
+            is JSONArray -> parseJsonArrayTags(root)
+            is JSONObject -> parseJsonObjectTags(root)
+            else -> emptyList()
+        }
+    }
+
+    private fun parseJsonObjectTags(json: JSONObject): List<Pair<String, Int>> {
+        // 0. PixAI Tagger v1.0 格式：{num_classes, categories:[{name,offset,count,tags[]}]}
+        //    ⚠️ 必须放在最前面。否则会落到下面第 3 步的「通用键遍历」，
+        //    而 JSONObject.keys() 不保证顺序 -> 标签与输出索引彻底错位。
+        //    这里按 categories 顺序、每个 category 内 tags 顺序顺序 append，
+        //    列表下标天然等于全局索引（== offset + 局部下标），无需稀疏填充。
+        parsePixAICategories(json)?.let { return it }
+
+        // 1. 优先检查 Camie tagger v2 格式：dataset_info.tag_mapping.idx_to_tag
+        val datasetInfo = json.optJSONObject("dataset_info")
+        if (datasetInfo != null) {
+            val tagMapping = datasetInfo.optJSONObject("tag_mapping")
+            if (tagMapping != null) {
+                val idxToTag = tagMapping.optJSONObject("idx_to_tag")
+                if (idxToTag != null) {
+                    val tagToCategory = tagMapping.optJSONObject("tag_to_category")
+                    val totalTags = datasetInfo.optInt("total_tags", 0)
+                    val result = mutableListOf<Pair<String, Int>>()
+                    // idx_to_tag 的 key 是索引(0,1,2,...)，value 是标签名
+                    // 必须按索引顺序遍历，不能跳过空标签（否则索引错位）
+                    val count = if (totalTags > 0) totalTags else idxToTag.length()
+                    for (i in 0 until count) {
+                        val tagName = idxToTag.optString(i.toString(), "")
+                        val finalName = if (tagName.isBlank()) {
+                            android.util.Log.w("TaggerEngine", "JSON idx_to_tag[$i] 标签名为空，使用占位符")
+                            "__unused_json_${i}__"
+                        } else {
+                            tagName
+                        }
+                        val category = tagToCategory?.optString(tagName, "general") ?: "general"
+                        val catNum = when (category) {
+                            "general" -> 0
+                            "character" -> 4
+                            "rating" -> 1
+                            "meta" -> 9
+                            "artist" -> 5
+                            "year" -> 9
+                            "copyright" -> 3
+                            else -> 0
+                        }
+                        result.add(finalName to catNum)
+                    }
+                    if (result.isNotEmpty()) return result
+                }
+            }
+        }
+
+        // 2. 检查常见键名
+        val preferredKeys = listOf("tags", "labels", "classes", "names")
+        preferredKeys.forEach { key ->
+            val value = json.opt(key)
+            if (value is JSONArray) return parseJsonArrayTags(value)
+        }
+
+        // 3. 通用解析：遍历所有键值对（注意：JSONObject.keys() 不保证顺序，
+        // 这种格式的标签文件本身不适合需要精确索引对齐的场景，但作为后备保留）
+        val result = mutableListOf<Pair<String, Int>>()
+        val keys = json.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val value = json.opt(key)
+            when (value) {
+                is String -> result.add(if (value.isBlank()) "__unused_key_$key" to 0 else value to 0)
+                is Number -> result.add(key to 0)
+                is JSONObject -> {
+                    val extracted = extractJsonTagName(value)
+                    if (extracted != null) {
+                        result.add(extracted)
+                    } else {
+                        result.add("__unused_obj_$key" to 0)
+                    }
+                }
+            }
+        }
+        return result
+    }
+
+    /**
+     * 解析 PixAI Tagger v1.0 的 `tags.json`。
+     *
+     * 结构：
+     * ```json
+     * { "num_classes": 30877,
+     *   "categories": [ { "name": "general", "offset": 0, "count": 15043, "tags": ["1girl", ...] }, ... ] }
+     * ```
+     * category 编号就是 categories 数组下标（0..5），属于该文件的自定义序，
+     * **不是** Danbooru 的 0/4/9 编号。
+     *
+     * 返回 null 表示「不是这个格式」，交由调用方继续尝试其它格式。
+     */
+    private fun parsePixAICategories(json: JSONObject): List<Pair<String, Int>>? {
+        val cats = json.optJSONArray("categories") ?: return null
+        if (cats.length() == 0) return null
+
+        val expected = json.optInt("num_classes", 0)
+        val result = ArrayList<Pair<String, Int>>(if (expected > 0) expected else cats.length() * 64)
+
+        for (ci in 0 until cats.length()) {
+            val cat = cats.optJSONObject(ci) ?: continue
+            val tags = cat.optJSONArray("tags") ?: continue
+            for (ti in 0 until tags.length()) {
+                val raw = tags.optString(ti, "")
+                // 空位必须占位，否则索引会整体前移导致后续标签全部错位
+                val name = if (raw.isBlank()) "__unused_pixai_${ci}_${ti}__" else raw
+                result.add(name to ci)
+            }
+        }
+
+        if (result.isEmpty()) return null
+        if (expected > 0 && result.size != expected) {
+            android.util.Log.w(
+                "TaggerEngine",
+                "PixAI v1.0 tags.json 解析出 ${result.size} 个标签，与 num_classes=$expected 不一致，可能导致索引错位"
+            )
+        }
+        return result
+    }
+
+    private fun parseJsonArrayTags(array: JSONArray): List<Pair<String, Int>> {
+        val result = mutableListOf<Pair<String, Int>>()
+        for (i in 0 until array.length()) {
+            when (val item = array.opt(i)) {
+                is String -> result.add(if (item.isBlank()) "__unused_arr_${i}__" to 0 else item to 0)
+                is JSONObject -> {
+                    val extracted = extractJsonTagName(item)
+                    if (extracted != null) {
+                        result.add(extracted)
+                    } else {
+                        result.add("__unused_arr_${i}__" to 0)
+                    }
+                }
+                else -> result.add("__unused_arr_${i}__" to 0)
+            }
+        }
+        return result
+    }
+
+    private fun extractJsonTagName(json: JSONObject): Pair<String, Int>? {
+        val name = listOf("name", "tag", "label", "class", "caption")
+            .firstNotNullOfOrNull { key -> json.optString(key).takeIf { it.isNotBlank() } }
+            ?: return null
+        val category = json.optInt("category", json.optInt("type", 0))
+        return name.trim() to category
+    }
+
+    /** Returns null on success, or a human-readable error message. */
+    fun load(modelConfig: ModelConfig = builtInModelConfig()): String? {
+        return synchronized(lock) {
+            runCatching { session?.close() }
+            session = null
+        tagNames = emptyList()
+        tagCategories = emptyList()
+        inputSize = 448
+        inputLayout = InputLayout.NHWC
+        preferredPreprocessMode = null
+        modelAdapter = TaggerAdapterRegistry.forModel(modelConfig.id)
+        modelFamily = when {
+            modelAdapter === TaggerAdapterRegistry.camie -> "camie"
+            // 必须排在 pixai 之前：v1.0 与 v0.9 是两个不同的适配器实例
+            modelAdapter === TaggerAdapterRegistry.pixaiV10 -> "pixai_v1"
+            modelAdapter === TaggerAdapterRegistry.pixai -> "pixai"
+            modelAdapter === TaggerAdapterRegistry.animeTimm -> "animetimm"
+            else -> "generic"
+        }
+        when (modelFamily) {
+            "camie", "animetimm" -> {
+                modelMean = floatArrayOf(0.485f, 0.456f, 0.406f)
+                modelStd = floatArrayOf(0.229f, 0.224f, 0.225f)
+                preserveAspect = true
+            }
+            "pixai" -> {
+                modelMean = floatArrayOf(0.5f, 0.5f, 0.5f)
+                modelStd = floatArrayOf(0.5f, 0.5f, 0.5f)
+                preserveAspect = false
+            }
+            // v1.0 官方：短边等比缩放后居中贴**黑底**，再 px/255 -> (x-0.5)/0.5
+            "pixai_v1" -> {
+                modelMean = floatArrayOf(0.5f, 0.5f, 0.5f)
+                modelStd = floatArrayOf(0.5f, 0.5f, 0.5f)
+                preserveAspect = true
+            }
+            else -> {
+                modelMean = floatArrayOf(0f, 0f, 0f)
+                modelStd = floatArrayOf(1f, 1f, 1f)
+                preserveAspect = false
+            }
+        }
+
+        val modelFile = modelConfig.modelFile ?: File(context.filesDir, "model.onnx")
+        try {
+            if (modelConfig.isBuiltIn && (!modelFile.exists() || modelFile.length() == 0L)) {
+                context.assets.open("model.onnx").use { input ->
+                    modelFile.outputStream().use { output ->
+                        val buffer = ByteArray(1 shl 20) // 1MB chunks
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read == -1) break
+                            output.write(buffer, 0, read)
+                        }
+                    }
+                }
+            }
+            if (!modelFile.exists() || modelFile.length() == 0L) {
+                return context.getString(R.string.model_onnx_missing, modelConfig.displayName)
+            }
+        } catch (e: Throwable) {
+            return context.getString(R.string.model_onnx_missing, e.message ?: "")
+        }
+
+        val env = try {
+            OrtEnvironment.getEnvironment().also { environment = it }
+        } catch (e: Throwable) {
+            return context.getString(R.string.model_load_failed, e.message ?: e.javaClass.simpleName)
+        }
+
+        session = try {
+            // Snapdragon 优化：配置 SessionOptions
+            // 1. 内存管理优化：禁用内存模式优化 + 环境分配器（提升长时间运行稳定性）
+            // 2. 线程优化：根据设备能力配置推理线程数
+            // 3. 安全策略：Tagger 模型默认使用纯 CPU 推理
+            //    NNAPI 对 WD Tagger 模型兼容性差，容易触发 native crash（无法被 Java try-catch 捕获）
+            //    仅在 DetEngine（YOLO 检测）中启用 NNAPI，该场景有完善的回退机制
+            val options = SessionOptions().apply {
+                // 内存管理优化
+                setMemoryPatternOptimization(false)
+                addConfigEntry("session.use_env_allocators", "1")
+
+                // 线程优化：根据设备大核数配置
+                val bigCores = runCatching { DeviceCapability.detect(context).bigCoreCount }.getOrDefault(4)
+                val threadCount = when {
+                    bigCores >= 4 -> 4  // 骁龙 8 系：4 线程
+                    bigCores >= 2 -> 2  // 骁龙 7 系：2 线程
+                    else -> 1           // 低端设备：1 线程
+                }
+                setInterOpNumThreads(threadCount)
+                setIntraOpNumThreads(threadCount)
+            }
+            env.createSession(modelFile.absolutePath, options)
+        } catch (e: Throwable) {
+            // 回退到最小配置会话
+            try {
+                val fallbackOptions = SessionOptions().apply {
+                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                    addConfigEntry("session.use_env_allocators", "1")
+                }
+                env.createSession(modelFile.absolutePath, fallbackOptions)
+            } catch (e2: Throwable) {
+                return context.getString(R.string.model_load_failed, e2.message ?: "")
+            }
+        }
+
+        session?.inputNames?.firstOrNull()?.let { inputName = it }
+        session?.inputInfo?.get(inputName)?.info?.let { info ->
+            // Try to read the model's expected spatial size if it's static.
+            val shape = (info as? ai.onnxruntime.TensorInfo)?.shape
+            if (shape != null && shape.size == 4) {
+                when {
+                    shape[1] == 3L -> {
+                        inputLayout = InputLayout.NCHW
+                        val spatial = listOf(shape[2], shape[3]).firstOrNull { it > 0 } ?: 448L
+                        inputSize = spatial.toInt()
+                    }
+                    shape[3] == 3L -> {
+                        inputLayout = InputLayout.NHWC
+                        val spatial = listOf(shape[1], shape[2]).firstOrNull { it > 0 } ?: 448L
+                        inputSize = spatial.toInt()
+                    }
+                    else -> {
+                        val spatial = shape.firstOrNull { it > 3 } ?: 448L
+                        inputSize = spatial.toInt()
+                    }
+                }
+            }
+        }
+
+        val names = mutableListOf<String>()
+        val cats = mutableListOf<Int>()
+        try {
+            val tagsFile = modelConfig.tagsFile
+            if (tagsFile != null) {
+                val parsedTags = parseTagFile(tagsFile)
+                names.addAll(parsedTags.map { it.first })
+                cats.addAll(parsedTags.map { it.second })
+            } else if (!modelConfig.isBuiltIn) {
+                return "找不到与 ${modelConfig.displayName} 匹配的标签表。请导入同源的 selected_tags.csv / tags.csv / labels.txt / classes.json，最好与模型文件同名。"
+            } else {
+                try {
+                    context.assets.open("selected_tags.csv").use { stream ->
+                        BufferedReader(InputStreamReader(stream)).useLines { lines ->
+                            parseCsvTagLines(lines.toList()).forEach { tag ->
+                                names.add(tag.first)
+                                cats.add(tag.second)
+                            }
+                        }
+                    }
+                } catch (_: Throwable) {
+                    return context.getString(R.string.selected_tags_missing)
+                }
+            }
+        } catch (e: Throwable) {
+            return context.getString(R.string.selected_tags_missing, e.message ?: "")
+        }
+        if (names.isEmpty()) {
+            return context.getString(R.string.selected_tags_missing)
+        }
+        modelAdapter?.labelCount?.let { expected ->
+            if (names.size != expected) {
+                return "模型 ${modelConfig.displayName} 的适配器要求 $expected 个标签，但标签表解析得到 ${names.size} 个。请使用模型仓库提供的同源标签文件。"
+            }
+        }
+
+        val outputTagCount = inferOutputTagCount()
+        if (outputTagCount > 0 && outputTagCount != names.size) {
+            // 标签表比模型输出多：截取前 N 个（常见于通用标签文件被多模型共用）
+            // 标签表比模型输出少：报错（会导致提示词错位）
+            if (names.size > outputTagCount) {
+                android.util.Log.w("TaggerEngine", "标签表(${names.size})多于模型输出($outputTagCount)，截取前 $outputTagCount 项")
+                while (names.size > outputTagCount) { names.removeAt(names.lastIndex) }
+                while (cats.size > outputTagCount) { cats.removeAt(cats.lastIndex) }
+            } else {
+                return "模型标签数量不匹配：ONNX 输出 $outputTagCount 项，但标签表只有 ${names.size} 项。请导入与该模型同源的标签文件，避免提示词错位。"
+            }
+        }
+        tagNames = names
+        tagCategories = cats
+        currentModelName = modelConfig.displayName
+
+        null
+        } // synchronized(lock)
+    }
+
+    private fun inferOutputTagCount(): Int {
+        // 遍历所有输出，返回最大的最后一维（跳过 batch 维度）。
+        // Camie tagger v2 有 3 个输出：initial_predictions[1,70527],
+        // refined_predictions[1,70527], selected_candidates[1,256]。
+        // 取最大值 70527 作为标签数量。
+        val outputs = session?.outputInfo?.values ?: return 0
+        var maxCount = 0
+        for (output in outputs) {
+            val info = output.info as? ai.onnxruntime.TensorInfo ?: continue
+            val shape = info.shape
+            val lastDim = shape.lastOrNull() ?: continue
+            if (lastDim > 1 && lastDim > maxCount) {
+                maxCount = lastDim.toInt()
+            }
+        }
+        return maxCount
+    }
+
+    private fun preprocess(bitmap: Bitmap, mode: PreprocessMode): PreparedInput {
+        val resized: Bitmap = when (modelFamily) {
+            "animetimm" -> {
+                // 官方 preprocess: PadToSize(512,512) -> Resize(384,384) -> CenterCrop(384,384).
+                // 先把图片放到至少 512x512 的中心画布，再统一缩到模型尺寸。
+                val canvasSize = 512
+                val canvasBmp = Bitmap.createBitmap(canvasSize, canvasSize, Bitmap.Config.ARGB_8888)
+                val canvas = android.graphics.Canvas(canvasBmp)
+                canvas.drawColor(android.graphics.Color.WHITE)
+                val scale = minOf(canvasSize.toFloat() / bitmap.width, canvasSize.toFloat() / bitmap.height, 1f)
+                val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
+                val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
+                val scaled = Bitmap.createScaledBitmap(bitmap, w, h, true)
+                canvas.drawBitmap(scaled, (canvasSize - w) / 2f, (canvasSize - h) / 2f, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG))
+                if (scaled !== bitmap) scaled.recycle()
+                Bitmap.createScaledBitmap(canvasBmp, inputSize, inputSize, true).also { canvasBmp.recycle() }
+            }
+            "camie" -> {
+                val scale = minOf(inputSize.toFloat() / bitmap.width, inputSize.toFloat() / bitmap.height)
+                val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
+                val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
+                val scaled = Bitmap.createScaledBitmap(bitmap, w, h, true)
+                Bitmap.createBitmap(inputSize, inputSize, Bitmap.Config.ARGB_8888).also { canvasBmp ->
+                    val canvas = android.graphics.Canvas(canvasBmp)
+                    canvas.drawColor(android.graphics.Color.rgb(124, 116, 104))
+                    canvas.drawBitmap(scaled, (inputSize - w) / 2f, (inputSize - h) / 2f, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG))
+                    if (scaled !== bitmap) scaled.recycle()
+                }
+            }
+            // PixAI v1.0 官方 preprocess：短边等比缩放到 inputSize(=1008)，
+            // 居中贴在**纯黑 (0,0,0)** 画布上。注意不要用白色/灰色，会显著影响 logits。
+            "pixai_v1" -> {
+                val scale = minOf(inputSize.toFloat() / bitmap.width, inputSize.toFloat() / bitmap.height)
+                val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
+                val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
+                val scaled = Bitmap.createScaledBitmap(bitmap, w, h, true)
+                Bitmap.createBitmap(inputSize, inputSize, Bitmap.Config.ARGB_8888).also { canvasBmp ->
+                    val canvas = android.graphics.Canvas(canvasBmp)
+                    canvas.drawColor(android.graphics.Color.BLACK)
+                    canvas.drawBitmap(scaled, (inputSize - w) / 2f, (inputSize - h) / 2f, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG))
+                    if (scaled !== bitmap) scaled.recycle()
+                }
+            }
+            else -> Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
+        }
+        val buffer = FloatBuffer.allocate(inputSize * inputSize * 3)
+        val pixels = IntArray(inputSize * inputSize)
+        resized.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
+
+        fun norm(v: Int, c: Int): Float {
+            if (modelFamily == "generic") return v * (if (mode.scaleToUnit) 1f / 255f else 1f)
+            val x = v / 255f
+            return (x - modelMean[c]) / modelStd[c]
+        }
+        if (mode.layout == InputLayout.NHWC) {
+            for (p in pixels) {
+                val r = norm((p shr 16) and 0xFF, 0)
+                val g = norm((p shr 8) and 0xFF, 1)
+                val b = norm(p and 0xFF, 2)
+                if (mode.rgb) { buffer.put(r); buffer.put(g); buffer.put(b) }
+                else { buffer.put(b); buffer.put(g); buffer.put(r) }
+            }
+        } else {
+            val channelValues = Array(3) { FloatArray(inputSize * inputSize) }
+            for (i in pixels.indices) {
+                val p = pixels[i]
+                val r = norm((p shr 16) and 0xFF, 0)
+                val g = norm((p shr 8) and 0xFF, 1)
+                val b = norm(p and 0xFF, 2)
+                if (mode.rgb) { channelValues[0][i]=r; channelValues[1][i]=g; channelValues[2][i]=b }
+                else { channelValues[0][i]=b; channelValues[1][i]=g; channelValues[2][i]=r }
+            }
+            channelValues.forEach { it.forEach(buffer::put) }
+        }
+        buffer.rewind()
+        val shape = if (mode.layout == InputLayout.NHWC)
+            longArrayOf(1, inputSize.toLong(), inputSize.toLong(), 3)
+        else longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
+        if (resized !== bitmap) resized.recycle()
+        return PreparedInput(buffer, shape)
+    }
+
+    private fun putPixelChannels(buffer: FloatBuffer, pixel: Int, rgb: Boolean, scale: Float) {
+        val r = ((pixel shr 16) and 0xFF) * scale
+        val g = ((pixel shr 8) and 0xFF) * scale
+        val b = (pixel and 0xFF) * scale
+        if (rgb) {
+            buffer.put(r)
+            buffer.put(g)
+            buffer.put(b)
+        } else {
+            buffer.put(b)
+            buffer.put(g)
+            buffer.put(r)
+        }
+    }
+
+    /**
+     * Runs inference and returns smart-processed tags:
+     * - duplicate names are merged automatically
+     * - general and character tags can be re-weighted
+     * - final tags are sorted by adjusted score in descending order
+     */
+    fun tag(
+        bitmap: Bitmap,
+        threshold: Float,
+        generalWeight: Float = 1f,
+        characterWeight: Float = 1f
+    ): List<Tag> {
+        synchronized(lock) {
+        val currentSession = session ?: return emptyList()
+        val env = environment ?: return emptyList()
+
+        val prevPriority = when (highPerformanceMode) {
+            "power_saving" -> Process.getThreadPriority(Process.myTid()).also {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_MORE_FAVORABLE)
+            }
+            "performance" -> Process.getThreadPriority(Process.myTid()).also {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY)
+            }
+            else -> null // "auto" — let system scheduler decide
+        }
+
+        return try {
+            var bestFallback: List<Tag> = emptyList()
+            for (mode in compatiblePreprocessModes()) {
+                val result = runCatching {
+                    val prepared = preprocess(bitmap, mode)
+                    OnnxTensor.createTensor(env, prepared.buffer, prepared.shape).use { tensor ->
+                        currentSession.run(mapOf(inputName to tensor)).use runResults@{ results ->
+                            val scores = extractBestScores(results)
+                            if (scores.isEmpty()) return@runResults emptyList<Tag>()
+                            val tagsAboveThreshold = buildTagsFromScores(
+                                scores = scores,
+                                threshold = threshold,
+                                generalWeight = generalWeight,
+                                characterWeight = characterWeight,
+                                fallbackTopTags = false
+                            )
+                            val fallbackCandidate = buildTagsFromScores(
+                                scores = scores,
+                                threshold = threshold,
+                                generalWeight = generalWeight,
+                                characterWeight = characterWeight,
+                                fallbackTopTags = true
+                            )
+                            if (fallbackCandidate.firstOrNull()?.score ?: 0f > (bestFallback.firstOrNull()?.score ?: 0f)) {
+                                bestFallback = fallbackCandidate
+                            }
+                            tagsAboveThreshold
+                        }
+                    }
+                }.getOrDefault(emptyList())
+                if (result.isNotEmpty()) {
+                    preferredPreprocessMode = mode
+                    return result
+                }
+            }
+            bestFallback
+        } finally {
+            prevPriority?.let { Process.setThreadPriority(it) }
+        }
+        } // synchronized(lock)
+    }
+
+    private fun compatiblePreprocessModes(): List<PreprocessMode> {
+        if (modelFamily != "generic") {
+            // 专用模型禁止“猜测式”预处理；输入布局由 ONNX shape 确定。
+            return listOf(PreprocessMode(inputLayout, rgb = true, scaleToUnit = true))
+        }
+        val base = listOf(
+            PreprocessMode(inputLayout, rgb = false, scaleToUnit = false),
+            PreprocessMode(inputLayout, rgb = true, scaleToUnit = false),
+            PreprocessMode(inputLayout, rgb = false, scaleToUnit = true),
+            PreprocessMode(inputLayout, rgb = true, scaleToUnit = true)
+        )
+        return (listOfNotNull(preferredPreprocessMode) + base).distinct()
+    }
+
+    private fun extractBestScores(results: OrtSession.Result): FloatArray {
+        val candidates = mutableListOf<Pair<String, FloatArray>>()
+        val iterator = results.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            val values = mutableListOf<Float>()
+            flattenOutputValues(entry.value.value, values)
+            if (values.isNotEmpty()) candidates += entry.key to values.toFloatArray()
+        }
+        if (candidates.isEmpty()) return FloatArray(0)
+        // Give the registered adapter first choice. This prevents model-specific
+        // output semantics from being silently treated as generic WD outputs.
+        modelAdapter?.selectOutput(candidates, tagNames.size)?.let { return it }
+
+        return candidates.firstOrNull { it.second.size == tagNames.size }?.second
+            ?: candidates.maxByOrNull { it.second.size }!!.second
+    }
+
+    private fun flattenOutputValues(value: Any?, out: MutableList<Float>) {
+        when (value) {
+            is FloatArray -> out.addAll(value.toList())
+            is DoubleArray -> value.forEach { out.add(it.toFloat()) }
+            is IntArray -> value.forEach { out.add(it.toFloat()) }
+            is LongArray -> value.forEach { out.add(it.toFloat()) }
+            is Array<*> -> value.forEach { flattenOutputValues(it, out) }
+            is Number -> out.add(value.toFloat())
+        }
+    }
+
+    private fun buildTagsFromScores(
+        scores: FloatArray,
+        threshold: Float,
+        generalWeight: Float,
+        characterWeight: Float,
+        fallbackTopTags: Boolean
+    ): List<Tag> {
+        val normalizedScores = normalizeOutputScores(scores)
+        val bestByName = linkedMapOf<String, Tag>()
+        val maxCount = minOf(normalizedScores.size, tagNames.size)
+        for (i in 0 until maxCount) {
+            val rawScore = normalizedScores[i]
+            val name = tagNames[i].trim()
+            // 跳过空名称和内部占位符标签（__unused_xxx__ 等），这些用于保持索引对齐但不应出现在结果中
+            if (name.isEmpty() || name.startsWith("__unused_") || name.startsWith("__dup_header_")) continue
+            val category = tagCategories.getOrElse(i) { 0 }
+            val adjustedScore = rawScore * weightForCategory(category, generalWeight, characterWeight)
+            val effectiveThreshold = modelAdapter?.threshold(category, threshold) ?: threshold
+            if (fallbackTopTags || adjustedScore >= effectiveThreshold) {
+                val key = normalizeTagName(name)
+                val candidate = Tag(name, category, adjustedScore, rawScore)
+                val existing = bestByName[key]
+                if (existing == null || candidate.score > existing.score) {
+                    bestByName[key] = candidate
+                }
+            }
+        }
+        val sorted = bestByName.values.sortedWith(
+            compareByDescending<Tag> { it.score }.thenBy { it.name.lowercase() }
+        )
+        // 防止多模型融合污染 prompt：单模型最终输出也必须受最大标签限制。
+        // fallback 保持较小候选集，正常模式限制为 80 个高置信标签。
+        return if (fallbackTopTags) sorted.take(20) else sorted.take(80)
+    }
+
+    private fun normalizeOutputScores(scores: FloatArray): FloatArray {
+        val finite = scores.filter { it.isFinite() }
+        if (finite.isEmpty()) return scores
+        val minScore = finite.minOrNull() ?: 0f
+        val maxScore = finite.maxOrNull() ?: 0f
+        // pixai_v1 必须显式列出：官方输出是未过 sigmoid 的 logits，
+        // 而下面 looksLikeLogits 的启发式在「某张图 logits 恰好全落在 [0,1.5]」时会漏判。
+        val mustSigmoid = modelFamily == "camie" || modelFamily == "animetimm" || modelFamily == "pixai_v1"
+        val looksLikeLogits = minScore < 0f || maxScore > 1.5f
+        return if (mustSigmoid || looksLikeLogits) {
+            FloatArray(scores.size) { index -> sigmoid(scores[index]) }
+        } else scores
+    }
+
+    private fun sigmoid(value: Float): Float {
+        return (1.0 / (1.0 + exp(-value.toDouble()))).toFloat()
+    }
+
+    private fun weightForCategory(category: Int, generalWeight: Float, characterWeight: Float): Float {
+        // category 语义随模型而异：
+        //  - Danbooru 系（camie/pixai/animetimm）：0=general、4=character
+        //  - PixAI v1.0 用 tags.json 的自定义 0..5 序：1=character、4=meta
+        // 故 v1.0 的 character 落在 1 而不是 4。
+        return when {
+            category == 0 -> generalWeight
+            category == 4 && modelFamily != "pixai_v1" -> characterWeight
+            category == 1 && modelFamily == "pixai_v1" -> characterWeight
+            else -> 1f
+        }.coerceIn(0.1f, 2.5f)
+    }
+
+    private fun normalizeTagName(name: String): String {
+        return name.trim()
+            .lowercase()
+            .replace(' ', '_')
+            .replace(Regex("_+"), "_")
+    }
+
+    fun close() {
+        synchronized(lock) {
+            runCatching { session?.close() }
+            session = null
+        }
+    }
+}
