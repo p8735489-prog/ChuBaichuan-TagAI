@@ -833,7 +833,14 @@ class TaggerEngine(private val context: Context) {
         bitmap: Bitmap,
         threshold: Float,
         generalWeight: Float = 1f,
-        characterWeight: Float = 1f
+        characterWeight: Float = 1f,
+        /**
+         * 可选的真实进度回调：范围 0..1，表示本次打标的完成比例。
+         * 打标内部会依次尝试若干预处理模式（每种模式是一次完整推理），
+         * 因此这里按「已尝试模式数 / 总模式数」上报真实进度，
+         * 让上层进度条能如实反映推理进展，而不是长时间停在初始值后突然跳到 100%。
+         */
+        onInnerProgress: ((Float) -> Unit)? = null
     ): List<Tag> {
         synchronized(lock) {
         val currentSession = session ?: return emptyList()
@@ -851,7 +858,14 @@ class TaggerEngine(private val context: Context) {
 
         return try {
             var bestFallback: List<Tag> = emptyList()
-            for (mode in compatiblePreprocessModes()) {
+            val modes = compatiblePreprocessModes()
+            for ((modeIndex, mode) in modes.withIndex()) {
+                // 只报告已经完成的真实模型推理尝试。
+                // ONNX Runtime 没有提供当前 kernel 的可用百分比回调，
+                // 因此不能伪造“单次推理已经完成 37%”之类的数字。
+                val segStart = modeIndex.toFloat() / modes.size
+                val segEnd = (modeIndex + 1).toFloat() / modes.size
+                onInnerProgress?.invoke(segStart.coerceIn(0f, 1f))
                 val result = runCatching {
                     val prepared = preprocess(bitmap, mode)
                     OnnxTensor.createTensor(env, prepared.buffer, prepared.shape).use { tensor ->
@@ -879,6 +893,8 @@ class TaggerEngine(private val context: Context) {
                         }
                     }
                 }.getOrDefault(emptyList())
+                // 该预处理模式的完整 preprocess + ONNX Runtime inference 已结束。
+                onInnerProgress?.invoke(segEnd.coerceIn(0f, 1f))
                 if (result.isNotEmpty()) {
                     preferredPreprocessMode = mode
                     return result

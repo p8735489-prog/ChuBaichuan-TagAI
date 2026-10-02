@@ -53,7 +53,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -180,12 +179,15 @@ import Shirakawa.LocalCueWord.ui.components.SmoothCircularWavyProgressIndicator
 import Shirakawa.LocalCueWord.ui.components.ZoomableImageOverlay
 import Shirakawa.LocalCueWord.ui.components.OverlayIconButton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import androidx.compose.runtime.produceState
 import org.json.JSONArray
 import org.json.JSONObject
@@ -209,6 +211,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.ZipInputStream
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 private const val PREFS_NAME = "settings"
 private const val KEY_DYNAMIC_COLOR = "dynamic_color"
@@ -284,10 +287,8 @@ private const val MAX_HERO_SUBTITLE_FONT_SIZE = 28
 private const val HERO_APP_BAR_EXPANDED_HEIGHT_DP = 112
 
 // ---- 推理进度显示策略 ----
-// 显示值允许比真实值领先的百分比（吸收回调间隔，避免逐格跳动）
-private const val INFERENCE_PROGRESS_LEAD_PERCENT = 3f
-// 收不到真实进度时的兜底爬升硬上限，防止伪装成"快完成"
-private const val INFERENCE_PROGRESS_UNKNOWN_MAX_PERCENT = 8f
+// 进度只允许来自实际完成的模型/流水线工作，不使用“领先值”或时间爬升。
+// App 内数字、App 内进度条、通知栏进度条均使用同一个整数百分比。
 
 // 全局副标题字体大小 CompositionLocal，让所有副标题都可以响应字体大小设置
 val LocalSubtitleFontSize = compositionLocalOf { 16 }
@@ -634,6 +635,32 @@ fun ModelRegistry.ModelEntry.toDownloadable(): DownloadableAiModel? = when (cate
     )
 }
 
+private data class PostProcessResult(
+    val cleanResult: List<TaggerEngine.Tag>,
+    val score: ImageScore,
+    val savedImagePath: String?,
+    val historyRecords: List<TagRecord>,
+    val analysisStats: AnalysisStats,
+    val experienceState: ExperienceState?
+)
+
+/**
+ * 后处理进度的单一出口。进度只有在对应阶段真正结束后才会上报，
+ * App 内与通知栏共享同一百分比。
+ */
+private object ProgressReporter {
+    fun report(
+        context: Context,
+        percent: Int,
+        text: String,
+        onUiProgress: (Int, String) -> Unit
+    ) {
+        val p = percent.coerceIn(0, 100)
+        onUiProgress(p, text)
+        InferenceForegroundService.update(context, p, text)
+    }
+}
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var engine: TaggerEngine
@@ -647,6 +674,8 @@ class MainActivity : ComponentActivity() {
     private var incomingSpecialLinkRecord by mutableStateOf<TagRecord?>(null)
     private var availableAiModels by mutableStateOf<List<TaggerEngine.ModelConfig>>(emptyList())
     private var selectedAiModelId by mutableStateOf(TaggerEngine.DEFAULT_MODEL_ID)
+    private var loadedAiModelId: String? = null
+    private var modelLoadJob: kotlinx.coroutines.Job? = null
 
     override fun attachBaseContext(newBase: Context) {
         val option = newBase
@@ -1066,7 +1095,8 @@ class MainActivity : ComponentActivity() {
                             },
                             onSelectAiModel = { modelId ->
                                 android.util.Log.d("MainActivity", "onSelectAiModel: $modelId")
-                                selectedAiModelId = modelId
+                                // 先加载、成功后再提交 selected 状态。加载失败时保留当前可用模型，
+                                // 避免 UI 显示了新模型但实际 engine 已不可用。
                                 loadAiModel(modelId)
                             },
                             darkModeOption = darkModeOption,
@@ -1147,35 +1177,40 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadAiModel(modelId: String) {
+        // 连续快速切换模型时，只允许最后一次选择提交 UI 状态，避免旧任务
+        // 在较晚完成后把“当前模型”覆盖成用户刚刚取消的模型。
+        modelLoadJob?.cancel()
         isLoadingModel = true
         loadError = null
-        lifecycleScope.launch {
-            // scanModelConfigs 涉及文件系统遍历，放到 IO 线程避免主线程卡顿/ANR
+        modelLoadJob = lifecycleScope.launch {
             val scanned = withContext(Dispatchers.IO) {
                 runCatching { TaggerEngine.scanModelConfigs(applicationContext) }.getOrDefault(emptyList())
             }
+            if (!isActive) return@launch
             availableAiModels = scanned
-            // 优先精确匹配用户选择的模型；向后兼容旧版本存储的绝对路径（按文件名匹配）
+
             val matchedConfig = scanned.firstOrNull { it.id == modelId }
-                ?: scanned.firstOrNull {
-                    File(modelId).nameWithoutExtension == it.id
-                }
-            // 若用户选择的模型未找到（已被删除或尚未扫描到），回退到首个可用或内置模型，
-            // 保证引擎仍有模型可用；但回退时不覆盖用户已保存的选择。
+                ?: scanned.firstOrNull { File(modelId).nameWithoutExtension == it.id }
             val modelConfig = matchedConfig
                 ?: scanned.firstOrNull()
                 ?: TaggerEngine.builtInModelConfig()
+
             val error = withContext(Dispatchers.IO) { engine.load(modelConfig) }
+            if (!isActive) return@launch
+
             if (error == null) {
-                // UI 始终显示当前实际加载的模型；但仅当真正匹配到用户选择的模型时才持久化，
-                // 避免回退模型（id 不同）覆盖用户原本的选择，导致“当前使用”指向错误模型。
+                loadedAiModelId = modelConfig.id
                 selectedAiModelId = modelConfig.id
                 if (matchedConfig != null) {
                     prefs.edit().putString(KEY_SELECTED_AI_MODEL_ID, modelConfig.id).apply()
                 }
+            } else {
+                // 新模型加载失败时，恢复 UI 对“当前可运行模型”的指向。
+                loadedAiModelId?.let { selectedAiModelId = it }
             }
             loadError = error
             isLoadingModel = false
+            modelLoadJob = null
         }
     }
 
@@ -1186,6 +1221,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        modelLoadJob?.cancel()
+        modelLoadJob = null
         super.onDestroy()
         engine.close()
     }
@@ -1474,6 +1511,9 @@ fun TaggerScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // 单个 TaggerEngine 共享同一 session；把完整的“加载/推理/切换模型”事务串行化，
+    // 避免批量识别、模型对比和普通识别互相切换 session 导致结果错乱。
+    val inferenceMutex = remember { Mutex() }
 
     var imageUri by remember { mutableStateOf<Uri?>(null) }
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -1481,20 +1521,11 @@ fun TaggerScreen(
     var imageScore by remember { mutableStateOf<ImageScore?>(null) }
     var isRunning by remember { mutableStateOf(false) }
     var inferenceJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    var inferenceProgressTargetPercent by remember { mutableStateOf(0f) }
+    var inferenceProgressPercent by remember { mutableStateOf(0) }
     var inferenceProgressText by remember { mutableStateOf("") }
-    // 真实进度值（来自 onProgress 回调，0..1），用于驱动 UI
+    // 真实进度值（来自模型流水线 onProgress 回调，0..1）。
+    // 不再使用“假进度爬升”或提前百分比，保证 UI 与通知栏完全同源。
     var realProgress by remember { mutableStateOf(0f) }
-    // 记录上次真实进度更新时间，用于判断是否处于"长操作等待"状态
-    var lastRealProgressUpdateMs by remember { mutableStateOf(0L) }
-    val animatedInferenceProgressPercent by animateFloatAsState(
-        targetValue = inferenceProgressTargetPercent.coerceIn(0f, 100f),
-        animationSpec = spring(
-            dampingRatio = 0.72f,
-            stiffness = 350f
-        ),
-        label = "inferenceProgressPercent"
-    )
     var lastInferenceTimeMs by remember { mutableStateOf<Long?>(null) }
     var threshold by remember { mutableStateOf(0.35f) }
     var showFileManager by remember { mutableStateOf(false) }
@@ -1584,38 +1615,8 @@ fun TaggerScreen(
 
     LaunchedEffect(isRunning) {
         if (!isRunning) return@LaunchedEffect
-        inferenceProgressTargetPercent = 0f
+        inferenceProgressPercent = 0
         realProgress = 0f
-        lastRealProgressUpdateMs = System.currentTimeMillis()
-        // 显示值 = 真实值 + 允许的"少量领先"。
-        //
-        // 设计取舍：
-        //  - 之前的实现按 gap 分档追赶（gap>30 时每帧 +4%），显示值长期落后真实值几十个百分点，
-        //    用户看到的百分比其实"不是真的"。
-        //  - 现在改为：只要拿到真实进度，显示值就**直接贴合真实值**（允许 3% 以内的前瞻缓冲，
-        //    让动画不至于一格一格跳）。真实值什么时候到 60%，界面就什么时候显示约 60%。
-        //  - 仅在「完全收不到真实进度」时才启用缓慢爬升兜底（否则进度条纹丝不动会被误判为卡死）,
-        //    且爬升有硬上限（8%），避免兜底值跑到真实值前面形成"假进度"。
-        while (isRunning) {
-            delay(60L)
-            // 真实进度映射到百分比（0..1 → 0..99%，留 1% 给完成跳转）
-            val realPercent = (realProgress * 99f).coerceIn(0f, 99f)
-            val now = System.currentTimeMillis()
-            val timeSinceLastRealUpdate = now - lastRealProgressUpdateMs
-            val hasRealProgress = realProgress > 0f
-            inferenceProgressTargetPercent = if (hasRealProgress) {
-                // 真实进度已知：目标 = 真实值（可带最多 3% 前瞻），并保持单调不回退
-                val target = (realPercent + INFERENCE_PROGRESS_LEAD_PERCENT).coerceAtMost(99.5f)
-                maxOf(inferenceProgressTargetPercent, target)
-            } else {
-                // 真实进度未知：缓慢爬升兜底，硬上限 8%，绝不伪装成"快完成了"
-                val creepBonus = if (timeSinceLastRealUpdate > 1200L) {
-                    minOf((timeSinceLastRealUpdate - 1200L) * 0.0015f, 5f)
-                } else 0f
-                (inferenceProgressTargetPercent + 0.6f + creepBonus)
-                    .coerceAtMost(INFERENCE_PROGRESS_UNKNOWN_MAX_PERCENT)
-            }
-        }
     }
 
     // 监听通知栏停止按钮广播
@@ -1665,18 +1666,18 @@ fun TaggerScreen(
         }
         val result = withContext(Dispatchers.IO) {
             runCatching {
-                jointInference.run(
-                    bitmap = bmp,
-                    precisionMode = precisionMode && detReady,
-                    threshold = threshold,
-                    generalWeight = generalTagWeight,
-                    characterWeight = characterTagWeight
-                ).tags
+                inferenceMutex.withLock {
+                    jointInference.run(
+                        bitmap = bmp,
+                        precisionMode = precisionMode && detReady,
+                        threshold = threshold,
+                        generalWeight = generalTagWeight,
+                        characterWeight = characterTagWeight
+                    ).tags
+                }
             }
         }
-        val tags = result.getOrElse {
-            emptyList()
-        }.filterPromptNoiseTags()
+        val tags = result.getOrElse { emptyList() }.filterPromptNoiseTags()
         val err = result.exceptionOrNull()
         batchResults = batchResults + BatchResultItem(
             uri = uri,
@@ -1685,12 +1686,12 @@ fun TaggerScreen(
             success = err == null,
             errorMessage = err?.message
         )
-        // 存历史（IO 操作在 IO 线程执行）
+        // 文件写入在 IO 线程，Compose 状态更新回到主线程，避免跨线程直接修改 Snapshot 状态。
         if (err == null && tags.isNotEmpty()) {
-            withContext(Dispatchers.IO) {
-                val savedImagePath = saveHistoryImage(context, bmp)
-                historyRecords = saveTagRecord(context, KEY_HISTORY_TAG_RECORDS, tags.take(safePromptTagLimit).toTagText(), savedImagePath)
-            }
+            val savedImagePath = withContext(Dispatchers.IO) { saveHistoryImage(context, bmp) }
+            historyRecords = saveTagRecord(
+                context, KEY_HISTORY_TAG_RECORDS, tags.take(safePromptTagLimit).toTagText(), savedImagePath
+            )
         }
         batchProgressIndex = batchProgressIndex + 1
     }
@@ -2391,6 +2392,10 @@ fun TaggerScreen(
                 selectedBatchUris = emptyList()
                 batchResults = emptyList()
                 batchProgressIndex = 0
+            },
+            onCancel = {
+                // 关闭“进度”不会再留下后台批处理；修改 key 会取消当前 LaunchedEffect。
+                isBatchRunning = false
             }
         )
     }
@@ -2640,7 +2645,8 @@ fun TaggerScreen(
                 scope.launch {
                     val (r1, r2) = try {
                         withContext(Dispatchers.IO) {
-                            val m1 = aiModels.firstOrNull { it.id == m1Id }
+                            inferenceMutex.withLock {
+                                val m1 = aiModels.firstOrNull { it.id == m1Id }
                             val m2 = aiModels.firstOrNull { it.id == m2Id }
                             val originalId = selectedAiModelId
                             var t1 = emptyList<TaggerEngine.Tag>()
@@ -2659,8 +2665,9 @@ fun TaggerScreen(
                             }
                             // 恢复原模型
                             val orig = aiModels.firstOrNull { it.id == originalId } ?: aiModels.firstOrNull()
-                            if (orig != null) engine.load(orig)
-                            t1 to t2
+                                if (orig != null) engine.load(orig)
+                                t1 to t2
+                            }
                         }
                     } catch (e: Exception) {
                         android.util.Log.w("CompareModels", "模型对比失败: ${e.message}", e)
@@ -2977,16 +2984,26 @@ fun TaggerScreen(
         // 才有足够宽度完整显示，不会被多个图标挤成省略号。
         // 展开高度压缩到 HERO_APP_BAR_EXPANDED_HEIGHT_DP，减少顶部留白。
         topBar = {
-            if (selectedMainTab != 3) {
-                LargeTopAppBar(
-                    // 展开高度 152dp → 112dp，压缩顶部留白（折叠后仍为官方 64dp）。
+            when (selectedMainTab) {
+                0 -> LargeTopAppBar(
                     expandedHeight = HERO_APP_BAR_EXPANDED_HEIGHT_DP.dp,
                     title = {
-                        // 标题 + 副标题各占一行，都不换行、超出省略。
-                        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        val collapseFraction = topBarScrollBehavior.state.collapsedFraction.coerceIn(0f, 1f)
+                        // 折叠后仍保留副标题：不要把它的高度压到 0，否则 LargeTopAppBar
+                        // 进入 collapsed 状态时副标题会直接消失。副标题只降低透明度，
+                        // 这样标题区从展开到折叠始终保持一致的信息层级。
+                        val titleFontSize = (32f - 10f * collapseFraction).sp
+                        val titleLineHeight = (38f - 10f * collapseFraction).sp
+                        val subtitleAlpha = (1f - 0.28f * collapseFraction).coerceIn(0.72f, 1f)
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(1.dp),
+                            modifier = Modifier.wrapContentHeight()
+                        ) {
                             Text(
                                 text = stringResource(R.string.app_hero_title),
-                                style = MaterialTheme.typography.headlineSmall,
+                                fontSize = titleFontSize,
+                                lineHeight = titleLineHeight,
+                                fontWeight = FontWeight.Normal,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -2995,19 +3012,20 @@ fun TaggerScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .height(18.dp)
+                                    .alpha(subtitleAlpha)
                             )
                         }
                     },
-                    // 左侧不再放分享按钮：把宽度全部让给标题，
-                    // 否则折叠成 64dp 小标题行时 "Local Cue Word" 会被挤成省略号。
                     actions = {
-                        // 只保留一个「溢出菜单」入口（照搬 local-dream ModelListScreen 的写法）：
-                        // 单个 ⋮ 按钮不跟标题抢宽度，是官方推荐的多入口收敛方式。
-                        // 外层套 Box：让 DropdownMenu 以图标自身为锚点，弹层才会贴在按钮正下方。
                         Box {
                             var menuExpanded by remember { mutableStateOf(false) }
-                            IconButton(onClick = { menuExpanded = true }) {
+                            IconButton(
+                                onClick = { menuExpanded = true },
+                                modifier = Modifier.clip(RoundedCornerShape(14.dp))
+                            ) {
                                 Icon(
                                     Icons.Filled.MoreVert,
                                     contentDescription = stringResource(R.string.app_overflow_menu)
@@ -3017,58 +3035,19 @@ fun TaggerScreen(
                                 expanded = menuExpanded,
                                 onDismissRequest = { menuExpanded = false }
                             ) {
-                                // 分享仅对识别页有意义：记录/模型/设置页不展示该项。
-                                if (selectedMainTab == 0) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.welcome_dialog_share)) },
-                                    leadingIcon = {
-                                        Icon(Icons.Filled.Share, contentDescription = null)
-                                    },
-                                    onClick = {
-                                        menuExpanded = false
-                                        sharePlainText(context, PROJECT_URL)
-                                    }
-                                )
-                                }
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.history_title)) },
-                                    leadingIcon = {
-                                        Icon(Icons.Filled.History, contentDescription = null)
-                                    },
-                                    onClick = {
-                                        menuExpanded = false
-                                        showHistoryDialog = true
-                                    }
+                                    leadingIcon = { Icon(Icons.Filled.History, contentDescription = null) },
+                                    onClick = { menuExpanded = false; showHistoryDialog = true }
                                 )
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.favorites_title)) },
-                                    leadingIcon = {
-                                        Icon(Icons.Filled.Favorite, contentDescription = null)
-                                    },
-                                    onClick = {
-                                        menuExpanded = false
-                                        showFavoritesDialog = true
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.app_menu_project_url)) },
-                                    leadingIcon = {
-                                        Icon(Icons.Filled.Code, contentDescription = null)
-                                    },
-                                    onClick = {
-                                        menuExpanded = false
-                                        runCatching {
-                                            context.startActivity(
-                                                Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_URL))
-                                            )
-                                        }
-                                    }
+                                    leadingIcon = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                                    onClick = { menuExpanded = false; showFavoritesDialog = true }
                                 )
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.compare_title)) },
-                                    leadingIcon = {
-                                        Icon(Icons.Filled.Compare, contentDescription = null)
-                                    },
+                                    leadingIcon = { Icon(Icons.Filled.Compare, contentDescription = null) },
                                     onClick = {
                                         menuExpanded = false
                                         if (aiModels.size < 2) {
@@ -3083,12 +3062,37 @@ fun TaggerScreen(
                                         }
                                     }
                                 )
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.community_entry_short)) },
+                                    leadingIcon = { Icon(Icons.Filled.Groups, contentDescription = null) },
+                                    onClick = { menuExpanded = false; showCommunityDialog = true }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.source_code_entry)) },
+                                    leadingIcon = { Icon(Icons.Filled.Code, contentDescription = null) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_URL))) }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.footer_website)) },
+                                    leadingIcon = { Icon(Icons.Filled.Public, contentDescription = null) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(WEBSITE_URL))) }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.footer_sponsor)) },
+                                    leadingIcon = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                                    onClick = { menuExpanded = false; showSponsorDialog = true }
+                                )
                             }
                         }
                     },
                     scrollBehavior = topBarScrollBehavior,
-                    // 保持 iOS 液态玻璃风格：topbar 不绘制背景，让自定义背景透出来。
-                    // scrolledContainerColor 同样透明 —— 折叠后不要突兀地变成实色块。
                     colors = TopAppBarDefaults.largeTopAppBarColors(
                         containerColor = Color.Transparent,
                         scrolledContainerColor = Color.Transparent,
@@ -3096,27 +3100,90 @@ fun TaggerScreen(
                         actionIconContentColor = MaterialTheme.colorScheme.primary
                     )
                 )
+                1 -> MediumTopAppBar(
+                    title = {
+                        Text(
+                            stringResource(R.string.main_tab_records),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
+                    scrollBehavior = topBarScrollBehavior,
+                    colors = TopAppBarDefaults.mediumTopAppBarColors(
+                        containerColor = Color.Transparent,
+                        scrolledContainerColor = Color.Transparent
+                    )
+                )
+                2 -> MediumTopAppBar(
+                    title = {
+                        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            Text(
+                                stringResource(R.string.main_tab_models),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                stringResource(R.string.ai_model_source_title),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(
+                            onClick = { showImportGuideDialog = true },
+                            enabled = !isLoadingModel && downloadingAiModelId == null,
+                            modifier = Modifier.clip(RoundedCornerShape(14.dp))
+                        ) {
+                            Icon(
+                                Icons.Filled.FileOpen,
+                                contentDescription = stringResource(R.string.ai_model_import_file)
+                            )
+                        }
+                    },
+                    scrollBehavior = topBarScrollBehavior,
+                    colors = TopAppBarDefaults.mediumTopAppBarColors(
+                        containerColor = Color.Transparent,
+                        scrolledContainerColor = Color.Transparent
+                    )
+                )
+                3 -> MediumTopAppBar(
+                    title = {
+                        Text(
+                            stringResource(R.string.settings_title),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
+                    scrollBehavior = topBarScrollBehavior,
+                    colors = TopAppBarDefaults.mediumTopAppBarColors(
+                        containerColor = Color.Transparent,
+                        scrolledContainerColor = Color.Transparent
+                    )
+                )
             }
         },
         bottomBar = {
             IosMorphingSegmentedControl(
                 options = listOf(
-                    "0" to stringResource(R.string.main_tab_recognition),
-                    "1" to stringResource(R.string.main_tab_records),
-                    "2" to stringResource(R.string.main_tab_models),
-                    "3" to stringResource(R.string.settings_title)
+                    Triple("0", stringResource(R.string.main_tab_recognition), Icons.Filled.AutoAwesome),
+                    Triple("1", stringResource(R.string.main_tab_records), Icons.Filled.History),
+                    Triple("2", stringResource(R.string.main_tab_models), Icons.Filled.Memory),
+                    Triple("3", stringResource(R.string.settings_title), Icons.Filled.Settings)
                 ),
                 current = selectedMainTab.toString(),
                 onSelect = { tabValue ->
-                    // 防止异常状态值导致切页时崩溃
-                    // 回到顶部已由 LaunchedEffect(selectedMainTab) 统一处理，
-                    // 这里只更新目标 tab，不在点击回调里启动协程，避免快速连点时协程堆积。
                     selectedMainTab = tabValue.toIntOrNull()?.coerceIn(0, 3) ?: 0
                 },
                 tabBarOpacity = if (useCustomBackgroundStyle) customBackgroundTabBarOpacity else 0.58f,
                 modifier = Modifier
                     .navigationBarsPadding()
-                    .padding(horizontal = 20.dp, vertical = 2.dp)
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
                     .fillMaxWidth()
             )
         }
@@ -3125,20 +3192,17 @@ fun TaggerScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                // 只有「设置」页没有 topBar，需要自己补状态栏内边距；
-                // 其它页面的 topBar 已经把状态栏 inset 计入自身高度，再补一次
-                // 会在顶部多出一整条状态栏高度的空白（之前「上方占空间太大」的元凶之一）。
-                .then(if (selectedMainTab == 3) Modifier.statusBarsPadding() else Modifier)
+                // 所有主页面统一使用 TopAppBar，自身负责状态栏 inset；内容区不重复添加。
                 .padding(horizontal = 20.dp)
                 // 原来叠了两层 bottom padding（16dp + 12dp），合并为一个，避免底部留白虚高。
                 // 顶部从 18dp 提到 30dp：大标题/小标题与第一张卡片（图片）之间留出更明确的呼吸感，
                 // 折叠态时也避免标题行贴住内容。
-                .padding(top = 30.dp, bottom = 16.dp)
+                .padding(top = 8.dp, bottom = 14.dp)
                 // 关键 —— 把滚动事件转发给 LargeTopAppBar 的 scrollBehavior，
                 // 这样 topbar 才能根据滚动距离自动从展开态折叠为收起态。
                 .nestedScroll(topBarScrollBehavior.nestedScrollConnection)
                 .verticalScroll(mainScrollState),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             AnimatedVisibility(visible = selectedMainTab != 2 && loadError != null) {
                 val localizedLoadError = localizedLoadErrorText(loadError)
@@ -3200,17 +3264,17 @@ fun TaggerScreen(
                 },
                 label = "tabContent"
             ) { tab ->
-                Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (tab == 0) {
             // Image preview — big, rounded, Pixel-style surface
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(260.dp)
+                    .height(220.dp)
                     .softEnter(3)
                     // 点击大图进入缩放查看（与历史/收藏一致的交互）
                     .clickable(enabled = bitmap != null) { showImageZoomOverlay = true },
-                shape = RoundedCornerShape(28.dp),
+                shape = RoundedCornerShape(26.dp),
                 colors = themedCardColors()
             ) {
                 Box(
@@ -3252,14 +3316,14 @@ fun TaggerScreen(
             ) {
                 FilledTonalButton(
                     onClick = { pickImageLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                    shape = RoundedCornerShape(20.dp),
+                    shape = RoundedCornerShape(18.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = if (useCustomBackgroundStyle) customBackgroundTabBarOpacity else 1f),
                         contentColor = MaterialTheme.colorScheme.primary
                     ),
                     modifier = Modifier
                         .weight(1f)
-                        .height(56.dp)
+                        .height(58.dp)
                 ) {
                     Icon(
                         Icons.Filled.Image,
@@ -3283,14 +3347,14 @@ fun TaggerScreen(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     },
-                    shape = RoundedCornerShape(20.dp),
+                    shape = RoundedCornerShape(18.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = if (useCustomBackgroundStyle) customBackgroundTabBarOpacity else 1f),
                         contentColor = MaterialTheme.colorScheme.primary
                     ),
                     modifier = Modifier
                         .weight(1f)
-                        .height(56.dp)
+                        .height(58.dp)
                 ) {
                     Icon(
                         Icons.Filled.PhotoLibrary,
@@ -3318,7 +3382,7 @@ fun TaggerScreen(
 
             // ---- 工作流 · 模型搭配（与识别合并）----
             Card(
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(26.dp),
                 colors = themedCardColors(),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -3869,13 +3933,13 @@ fun TaggerScreen(
                             .height(50.dp),
                         onClick = {
                             val bmp = bitmap ?: return@ElevatedButton
-                            inferenceProgressTargetPercent = 0f
+                            inferenceProgressPercent = 0
                             realProgress = 0f
                             inferenceProgressText = context.getString(R.string.workflow_progress_prepare)
                             isRunning = true
                             // 启动前台通知服务，防止后台被杀死
                             InferenceForegroundService.start(context)
-                            var lastNotifyUpdate = 0L
+                            var recognitionSucceeded = false
                             inferenceJob = scope.launch {
                                 try {
                                     val startedAt = SystemClock.elapsedRealtime()
@@ -3885,49 +3949,106 @@ fun TaggerScreen(
                                         if (precisionMode && !detReady) {
                                             inferenceProgressText = context.getString(R.string.workflow_progress_loading_det)
                                         }
-                                        jointInference.run(
-                                            bitmap = bmp,
-                                            precisionMode = precisionMode && detReady,
-                                            threshold = threshold,
-                                            generalWeight = generalTagWeight,
-                                            characterWeight = characterTagWeight,
-                                            onProgress = { progress, text ->
-                                                realProgress = progress.coerceIn(0f, 1f)
-                                                lastRealProgressUpdateMs = System.currentTimeMillis()
-                                                inferenceProgressText = text
-                                                // 节流更新通知（每200ms一次）
-                                                val now = System.currentTimeMillis()
-                                                if (now - lastNotifyUpdate > 200L) {
-                                                    lastNotifyUpdate = now
-                                                    val pct = (progress * 100).toInt().coerceIn(0, 100)
-                                                    InferenceForegroundService.update(context, pct, text)
+                                        inferenceMutex.withLock {
+                                            jointInference.run(
+                                                bitmap = bmp,
+                                                precisionMode = precisionMode && detReady,
+                                                threshold = threshold,
+                                                generalWeight = generalTagWeight,
+                                                characterWeight = characterTagWeight,
+                                                onProgress = { progress, text ->
+                                                    val clamped = progress.coerceIn(0f, 1f)
+                                                    realProgress = clamped
+                                                    inferenceProgressText = text
+                                                    // 唯一进度源：真实流水线完成比例 -> 整数百分比。
+                                                    // App 内数字、App 内进度条、通知栏进度条全部使用这个值，绝不提前。
+                                                    val shownPercent = (clamped * 100f).roundToInt().coerceIn(0, 100)
+                                                    if (shownPercent != inferenceProgressPercent) {
+                                                        inferenceProgressPercent = shownPercent
+                                                        InferenceForegroundService.update(context, shownPercent, text)
+                                                    }
                                                 }
-                                            }
-                                        ).tags
+                                            )
+                                        }.tags
                                     }
                                     if (!isActive) return@launch
-                                    // 后处理阶段：添加进度更新，避免卡在99%
-                                    realProgress = 0.98f
-                                    lastRealProgressUpdateMs = System.currentTimeMillis()
-                                    inferenceProgressText = context.getString(R.string.workflow_progress_filtering)
+                                    // 后处理也必须使用真实阶段进度。此前这里一进入后处理就
+                                    // 直接显示 98%，而真正的过滤、评分、历史写入可能仍在运行，
+                                    // 用户看到的就是“98% 卡死”。现在 96/97/98/99 分别对应
+                                    // 已完成的实际阶段，不再提前跳到 98%。
                                     val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+                                    val postProcessed = withContext(Dispatchers.IO) {
+                                        // 96%：流水线已经返回，开始最终标签过滤
+                                        val cleanResult = result.filterPromptNoiseTags()
+                                        ProgressReporter.report(
+                                            context,
+                                            96,
+                                            context.getString(R.string.workflow_progress_filtering),
+                                            onUiProgress = { percent, text ->
+                                                realProgress = percent / 100f
+                                                inferenceProgressPercent = percent
+                                                inferenceProgressText = text
+                                            }
+                                        )
+
+                                        // 97%：评分完成。scoreImage 只做轻量计算，但必须完成后再
+                                        // 推进百分比，避免进度条与实际状态脱节。
+                                        val score = scoreImage(bmp, cleanResult)
+                                        ProgressReporter.report(
+                                            context,
+                                            97,
+                                            context.getString(R.string.workflow_progress_scoring),
+                                            onUiProgress = { percent, text ->
+                                                realProgress = percent / 100f
+                                                inferenceProgressPercent = percent
+                                                inferenceProgressText = text
+                                            }
+                                        )
+
+                                        // 历史图片 JPEG 压缩 + 历史记录写入都在 IO 线程。
+                                        // 只有两者全部完成后才显示 98%，因此不会再出现
+                                        // “98% 已显示，但历史仍在同步写入”的假卡死。
+                                        val savedImagePath = saveHistoryImage(context, bmp)
+                                        val limitedTags = cleanResult.take(safePromptTagLimit)
+                                        val updatedHistory = saveTagRecord(
+                                            context, KEY_HISTORY_TAG_RECORDS, limitedTags.toTagText(),
+                                            savedImagePath, generateNegativePrompt(limitedTags), emptyMap()
+                                        )
+                                        ProgressReporter.report(
+                                            context,
+                                            98,
+                                            context.getString(R.string.workflow_progress_output),
+                                            onUiProgress = { percent, text ->
+                                                realProgress = percent / 100f
+                                                inferenceProgressPercent = percent
+                                                inferenceProgressText = text
+                                            }
+                                        )
+
+                                        ProgressReporter.report(
+                                            context,
+                                            99,
+                                            context.getString(R.string.workflow_progress_output),
+                                            onUiProgress = { percent, text ->
+                                                realProgress = percent / 100f
+                                                inferenceProgressPercent = percent
+                                                inferenceProgressText = text
+                                            }
+                                        )
+                                        // SharedPreferences 写入也放到 IO 线程，避免在主线程上
+                                        // 因历史记录过大/存储慢而表现为“99% 卡死”。
+                                        val stats = recordAnalysis(context, elapsedMs)
+                                        val exp = if (experienceEnabled) recordExperience(context) else null
+                                        PostProcessResult(cleanResult, score, savedImagePath, updatedHistory, stats, exp)
+                                    }
+
+                                    tags = postProcessed.cleanResult
+                                    imageScore = postProcessed.score
                                     lastInferenceTimeMs = elapsedMs
-                                    val cleanResult = result.filterPromptNoiseTags()
-                                    tags = cleanResult
-                                    imageScore = scoreImage(bmp, cleanResult)
-                                    realProgress = 0.99f
-                                    lastRealProgressUpdateMs = System.currentTimeMillis()
-                                    val savedImagePath = withContext(Dispatchers.IO) {
-                                        saveHistoryImage(context, bmp)
-                                    }
-                                    analysisStats = recordAnalysis(context, elapsedMs)
-                                    if (experienceEnabled) {
-                                        experienceState = recordExperience(context)
-                                    }
-                                    historyRecords = saveTagRecord(
-                                        context, KEY_HISTORY_TAG_RECORDS, cleanResult.take(safePromptTagLimit).toTagText(),
-                                        savedImagePath, generateNegativePrompt(cleanResult.take(safePromptTagLimit)), emptyMap()
-                                    )
+                                    analysisStats = postProcessed.analysisStats
+                                    postProcessed.experienceState?.let { experienceState = it }
+                                    historyRecords = postProcessed.historyRecords
+                                    recognitionSucceeded = true
                                 } catch (e: CancellationException) {
                                     android.util.Log.i("TaggerScreen", "识别已取消")
                                     throw e
@@ -3935,11 +4056,24 @@ fun TaggerScreen(
                                     android.util.Log.e("TaggerScreen", "识别失败", e)
                                     android.widget.Toast.makeText(context, context.getString(R.string.recognition_failed, e.message ?: ""), android.widget.Toast.LENGTH_SHORT).show()
                                 } finally {
-                                    inferenceProgressTargetPercent = 100f
-                                    InferenceForegroundService.stop(context)
-                                    delay(360L)
-                                    isRunning = false
-                                    inferenceJob = null
+                                    // 只有真正走完识别与后处理才上报 100%。
+                                    // 取消/异常不会伪造“100%完成”。
+                                    val completed = isActive && recognitionSucceeded
+                                    if (completed) {
+                                        realProgress = 1f
+                                        inferenceProgressPercent = 100
+                                        inferenceProgressText = context.getString(R.string.workflow_progress_done)
+                                        InferenceForegroundService.complete(context, inferenceProgressText)
+                                    } else {
+                                        InferenceForegroundService.stop(context)
+                                    }
+                                    // finally 发生在取消上下文时，普通 delay/状态写入可能再次抛 CancellationException，
+                                    // 导致 isRunning 永远保持 true。UI 清理必须使用 NonCancellable。
+                                    withContext(NonCancellable) {
+                                        if (completed) delay(360L)
+                                        isRunning = false
+                                        inferenceJob = null
+                                    }
                                 }
                             }
                         }
@@ -3979,11 +4113,11 @@ fun TaggerScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             SmoothCircularWavyProgressIndicator(
-                                progress = animatedInferenceProgressPercent.coerceIn(0f, 100f) / 100f,
+                                progress = inferenceProgressPercent.coerceIn(0, 100) / 100f,
                                 modifier = Modifier.size(30.dp)
                             )
                             Text(
-                                "${(animatedInferenceProgressPercent + 0.5f).toInt().coerceIn(0, 100)}%",
+                                "$inferenceProgressPercent%",
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = MaterialTheme.colorScheme.primary
@@ -3997,7 +4131,7 @@ fun TaggerScreen(
                             )
                         }
                         SmoothLinearWavyProgressIndicator(
-                            progress = animatedInferenceProgressPercent.coerceIn(0f, 100f) / 100f,
+                            progress = inferenceProgressPercent.coerceIn(0, 100) / 100f,
                             modifier = Modifier.fillMaxWidth()
                         )
                         // 阶段提示文本（小字，进度条左下角）
@@ -4223,40 +4357,64 @@ fun TaggerScreen(
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            OutlinedButton(
+                            FilledTonalButton(
                                 shape = RoundedCornerShape(18.dp),
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).height(52.dp),
                                 onClick = { showFavoritesDialog = true }
                             ) {
+                                Icon(
+                                    Icons.Filled.Favorite,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(7.dp))
                                 Text(
                                     stringResource(R.string.favorites_title),
                                     maxLines = 1,
-                                    style = MaterialTheme.typography.labelMedium
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.labelLarge
                                 )
                             }
-                            OutlinedButton(
+                            FilledTonalButton(
                                 shape = RoundedCornerShape(18.dp),
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).height(52.dp),
                                 onClick = { showHistoryDialog = true }
                             ) {
+                                Icon(
+                                    Icons.Filled.History,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(7.dp))
                                 Text(
                                     stringResource(R.string.history_title),
                                     maxLines = 1,
-                                    style = MaterialTheme.typography.labelMedium
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.labelLarge
                                 )
                             }
                         }
                         OutlinedButton(
                             shape = RoundedCornerShape(18.dp),
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().height(50.dp),
                             onClick = { showParseLinkDialog = true }
                         ) {
-                            Text(stringResource(R.string.parse_special_link))
+                            Icon(
+                                Icons.Filled.FileOpen,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                stringResource(R.string.parse_special_link),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
@@ -4306,20 +4464,6 @@ fun TaggerScreen(
                                 onSelect = changeAiDownloadSource,
                                 modifier = Modifier.weight(1f)
                             )
-                        }
-                        FilledTonalButton(
-                            onClick = { showImportGuideDialog = true },
-                            enabled = !isLoadingModel && downloadingAiModelId == null,
-                            shape = RoundedCornerShape(18.dp),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                contentColor = MaterialTheme.colorScheme.primary
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text(stringResource(R.string.ai_model_import_file), color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -4505,43 +4649,6 @@ fun TaggerScreen(
                 } // Column
             } // AnimatedContent
 
-            // 模型页、设置页不显示底部图标（交流群 / 源代码 / 赞助）
-            if (selectedMainTab !in setOf(2, 3)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    FooterLinkButton(
-                        icon = Icons.Filled.Groups,
-                        label = stringResource(R.string.community_entry_short),
-                        modifier = Modifier.weight(1f),
-                        onClick = { showCommunityDialog = true }
-                    )
-                    FooterLinkButton(
-                        icon = Icons.Filled.Code,
-                        label = stringResource(R.string.source_code_entry),
-                        modifier = Modifier.weight(1f),
-                        onClick = {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_URL)))
-                        }
-                    )
-                    FooterLinkButton(
-                        icon = Icons.Filled.Public,
-                        label = stringResource(R.string.footer_website),
-                        modifier = Modifier.weight(1f),
-                        onClick = {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(WEBSITE_URL)))
-                        }
-                    )
-                    FooterLinkButton(
-                        icon = Icons.Filled.Favorite,
-                        label = stringResource(R.string.footer_sponsor),
-                        modifier = Modifier.weight(1f),
-                        onClick = { showSponsorDialog = true }
-                    )
-                }
-            }
-
         }
         }
         // Play 商店风格的弯曲变形加载动画，作为轻量浮层展示，避免重新撑开顶部空白。
@@ -4565,7 +4672,7 @@ fun TaggerScreen(
     }
 @Composable
 private fun IosMorphingSegmentedControl(
-    options: List<Pair<String, String>>,
+    options: List<Triple<String, String, androidx.compose.ui.graphics.vector.ImageVector>>,
     current: String,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -4575,38 +4682,17 @@ private fun IosMorphingSegmentedControl(
     val selectedIndex = options.indexOfFirst { it.first == current }.coerceAtLeast(0)
     val hapticFeedback = LocalHapticFeedback.current
 
-    // 长按放大动画
-    var isLongPressed by remember { mutableStateOf(false) }
-    val pressScale by animateFloatAsState(
-        targetValue = if (isLongPressed) 1.06f else 1f,
-        animationSpec = spring(stiffness = 300f, dampingRatio = 0.6f),
-        label = "tabBarPressScale"
-    )
-
     BoxWithConstraints(
         modifier = modifier
-            .graphicsLayer {
-                scaleX = pressScale
-                scaleY = pressScale
-            }
-            .height(52.dp)
+            .height(64.dp)
             .clip(RoundedCornerShape(26.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = tabBarOpacity.coerceIn(0f, 1f)))
             .padding(5.dp)
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onLongPress = {
-                        isLongPressed = true
-                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                    },
-                    onTap = { isLongPressed = false }
-                )
-            }
     ) {
         val segmentWidth = maxWidth / options.size.toFloat()
         val sliderOffset by animateDpAsState(
             targetValue = segmentWidth * selectedIndex.toFloat(),
-            animationSpec = spring(stiffness = 420f, dampingRatio = 0.78f),
+            animationSpec = spring(stiffness = 520f, dampingRatio = 0.78f),
             label = "segmentSliderOffset"
         )
 
@@ -4623,21 +4709,19 @@ private fun IosMorphingSegmentedControl(
         Row(modifier = Modifier.fillMaxSize()) {
             options.forEachIndexed { index, option ->
                 val selected = index == selectedIndex
-                val textColor by animateColorAsState(
-                    targetValue = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    animationSpec = spring(stiffness = 400f, dampingRatio = 0.8f),
-                    label = "segmentTextColor"
-                )
-                // 按压反馈：用与全局一致的缩放动画替代默认灰色涟漪，
-                // 避免按下时矩形灰块叠在圆角胶囊滑块上产生割裂感。
                 val itemInteractionSource = remember { MutableInteractionSource() }
                 val itemPressed by itemInteractionSource.collectIsPressedAsState()
                 val itemScale by animateFloatAsState(
-                    targetValue = if (itemPressed) 0.94f else 1f,
-                    animationSpec = spring(stiffness = 700f, dampingRatio = 0.55f),
+                    targetValue = if (itemPressed) 0.95f else 1f,
+                    animationSpec = spring(stiffness = 700f, dampingRatio = 0.58f),
                     label = "navItemPressScale"
                 )
-                Box(
+                val contentColor by animateColorAsState(
+                    targetValue = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    animationSpec = tween(140),
+                    label = "navContentColor"
+                )
+                Column(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
@@ -4645,21 +4729,29 @@ private fun IosMorphingSegmentedControl(
                             scaleX = itemScale
                             scaleY = itemScale
                         }
-                        .clip(RoundedCornerShape(24.dp))
+                        .clip(RoundedCornerShape(22.dp))
                         .clickable(
                             interactionSource = itemInteractionSource,
                             indication = null
                         ) {
-                            isLongPressed = false
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             onSelect(option.first)
                         },
-                    contentAlignment = Alignment.Center
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
                 ) {
+                    Icon(
+                        imageVector = option.third,
+                        contentDescription = null,
+                        tint = contentColor,
+                        modifier = Modifier.size(if (selected) 21.dp else 20.dp)
+                    )
+                    Spacer(Modifier.height(2.dp))
                     Text(
                         text = option.second,
-                        color = textColor,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.ExtraBold,
+                        color = contentColor,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                         textAlign = TextAlign.Center,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -4671,56 +4763,41 @@ private fun IosMorphingSegmentedControl(
 }
 
 @Composable
-private fun FooterLinkButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
+private fun PageSectionHeader(
+    title: String,
+    subtitle: String? = null,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val pressed by interactionSource.collectIsPressedAsState()
-    val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 0.97f else 1f,
-        animationSpec = spring(stiffness = 700f, dampingRatio = 0.55f),
-        label = "footerLinkPressScale"
-    )
-    Column(
-        modifier = modifier
-            .height(64.dp)
-            .graphicsLayer {
-                scaleX = pressScale
-                scaleY = pressScale
-            }
-            .clip(RoundedCornerShape(20.dp))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                shape = RoundedCornerShape(20.dp)
-            )
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(horizontal = 4.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Icon(
-            icon,
-            contentDescription = label,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(21.dp)
-        )
-        Spacer(Modifier.height(3.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, lineHeight = 12.sp),
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary,
-            maxLines = 2,
-            overflow = TextOverflow.Clip,
-            softWrap = true,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
-        )
+        if (icon != null) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
     }
 }
 
@@ -5206,13 +5283,13 @@ fun TagListCard(
     onCopySingleTranslation: (String) -> Unit
 ) {
     Card(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(26.dp),
         colors = themedCardColors(),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // 标题行：标签数量 + 翻译按钮
             Row(
@@ -5233,15 +5310,16 @@ fun TagListCard(
                     Spacer(Modifier.width(8.dp))
                     Text(
                         stringResource(R.string.tag_list_title, tags.size),
-                        style = MaterialTheme.typography.labelLarge,
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
                 OutlinedButton(
                     enabled = tags.isNotEmpty() && !isTranslating,
-                    shape = RoundedCornerShape(16.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.height(48.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp),
                     onClick = onTranslate
                 ) {
                     if (isTranslating) {
@@ -5264,7 +5342,7 @@ fun TagListCard(
             // 三个独立复制入口
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 TagCopyChip(
                     label = stringResource(R.string.copy_tag_positive),
@@ -5319,9 +5397,9 @@ private fun TagDetailRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.42f))
-            .padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.52f))
+            .padding(start = 14.dp, top = 11.dp, bottom = 10.dp),
         verticalAlignment = Alignment.Top
     ) {
         Column(
@@ -5330,7 +5408,8 @@ private fun TagDetailRow(
         ) {
             Text(
                 tag.name,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )
             Text(
@@ -5343,27 +5422,27 @@ private fun TagDetailRow(
         Column(
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(2.dp),
-            modifier = Modifier.padding(end = 2.dp)
+            modifier = Modifier.padding(end = 3.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onCopyTag, modifier = Modifier.size(34.dp)) {
+                IconButton(onClick = onCopyTag, modifier = Modifier.size(40.dp)) {
                     Icon(
                         Icons.Filled.ContentCopy,
                         contentDescription = stringResource(R.string.copy_tag_positive),
                         tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.size(17.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
                 IconButton(
                     onClick = onCopyTranslation,
                     enabled = hasTranslation,
-                    modifier = Modifier.size(34.dp)
+                    modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
                         Icons.Filled.Translate,
                         contentDescription = stringResource(R.string.copy_tag_translation),
                         tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = if (hasTranslation) 1f else 0.35f),
-                        modifier = Modifier.size(17.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
             }
@@ -5373,9 +5452,10 @@ private fun TagDetailRow(
                 } else {
                     "%.2f".format(tag.score)
                 },
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.padding(end = 8.dp)
+                modifier = Modifier.padding(end = 9.dp)
             )
         }
     }
@@ -5391,8 +5471,8 @@ private fun TagCopyChip(
 ) {
     Box(
         modifier = modifier
-            .height(40.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .height(46.dp)
+            .clip(RoundedCornerShape(17.dp))
             .background(
                 MaterialTheme.colorScheme.secondaryContainer.copy(
                     alpha = if (enabled) 0.55f else 0.22f
@@ -6916,7 +6996,7 @@ private fun UnifiedModelCard(
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = cardColor)
     ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             // 标题行：图标 + 名称 + 官方标识 + 版本
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
@@ -8087,45 +8167,8 @@ fun SettingsPage(
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Card(
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Icon(
-                    Icons.Filled.Settings,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(28.dp)
-                )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        stringResource(R.string.settings_title),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        stringResource(R.string.settings_page_summary),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-
         AppearanceSettingsCard(
             useDynamicColor = useDynamicColor,
             themeStyle = themeStyle,
@@ -9324,7 +9367,8 @@ fun BatchProgressDialog(
     currentIndex: Int,
     isRunning: Boolean,
     results: List<BatchResultItem>,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onCancel: () -> Unit
 ) {
     val context = LocalContext.current
     val completedCount = currentIndex.coerceIn(0, total)
@@ -9445,7 +9489,7 @@ fun BatchProgressDialog(
                     TextButton(onClick = onDismiss) { Text(stringResource(R.string.settings_close), maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
             } else {
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.batch_stop), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                TextButton(onClick = onCancel) { Text(stringResource(R.string.batch_stop), maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
         }
     )
@@ -10413,7 +10457,7 @@ private fun themedSliderColors(): SliderColors {
 private fun themedCardColors(): CardColors {
     val alpha = LocalCardOpacity.current
     return CardDefaults.cardColors(
-        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = alpha)
+        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = (alpha * 0.96f).coerceIn(0f, 1f))
     )
 }
 
@@ -10919,24 +10963,59 @@ fun downloadAiModelBundle(
                 }
 
                 if (extraTempFiles.isEmpty()) {
-                    // ---- 普通模型：ONNX 95% + 标签 5% ----
-                    var firstFileDone = false
-                    val cumulativeProgress: (DownloadProgress) -> Unit = { progress ->
-                        val adjustedPercent = if (!firstFileDone) {
-                            // 线程数走结构化字段（threadCount），不再污染 phase 文案；
-                            // 这里用 startsWith 匹配，避免未来给 phase 追加后缀时失配。
-                            if (progress.phase.startsWith(onnxFileName) && progress.percent >= 100) {
-                                firstFileDone = true
-                            }
-                            (progress.percent * 95 / 100).coerceIn(0, 95)
-                        } else {
-                            95 + (progress.percent * 5 / 100).coerceIn(0, 5)
+                    // ---- 普通模型：按「真实字节占比」动态分配进度 ----
+                    // 以前这里把 ONNX 硬编码为 95%、标签固定 5%，导致：
+                    //   1) 进度条不是真实百分比——1.4GB 的 ONNX 只映射到 0~95%，
+                    //      用户看到数字爬到 95% 就长时间不动，数值与「已下载字节/总量」不符；
+                    //   2) 通知栏与 App 内的百分比都基于这个被缩放过的值，观感割裂。
+                    // 改为：先探测 ONNX 与标签文件的真实体积，再按字节占比切区间，
+                    // 用「累积已完成字节 / 总字节」直接换算百分比，天然真实且单调。
+                    val onnxUrl = "$baseUrl/$onnxFileName$downloadParams"
+                    val onnxProbe = probeDownloadTarget(onnxUrl, isCancelled)
+                    val onnxSize = onnxProbe.totalBytes.coerceAtLeast(0L)
+                    val tagsUrl = "$baseUrl/$tagFileName$downloadParams"
+                    val tagsProbe = probeDownloadTarget(tagsUrl, isCancelled)
+                    val tagsSize = tagsProbe.totalBytes.coerceAtLeast(0L)
+                    // 探测失败（=0）时用合理默认体积兜底：ONNX 是大头，标签是小文件
+                    val onnxFallbackBytes = 1024L * 1024L * 1024L // 1GB
+                    val tagsFallbackBytes = 2L * 1024L * 1024L     // 2MB
+                    val onnxWeight = if (onnxSize > 0L) onnxSize.toDouble() else onnxFallbackBytes.toDouble()
+                    val tagsWeight = if (tagsSize > 0L) tagsSize.toDouble() else tagsFallbackBytes.toDouble()
+                    val weightTotal = onnxWeight + tagsWeight
+                    val onnxEnd = (onnxWeight / weightTotal * 100.0).toInt().coerceIn(0, 100)
+                    android.util.Log.i(
+                        "AiModelDownload",
+                        "tagger 进度权重: onnx=${onnxSize}B tags=${tagsSize}B onnxRange=0..$onnxEnd"
+                    )
+                    // 单调游标：并行/顺序切换或探测偏差都可能让百分比偶尔回退，进度条倒退观感很差
+                    val monotonicCursor = intArrayOf(0)
+                    // 各文件的真实探测体积（用于把单文件字节换算成"整包累积字节"，
+                    // 让进度详情的"已下载/总计"与百分比同源、不再自相矛盾）
+                    val onnxBytesForSum = if (onnxSize > 0L) onnxSize else onnxFallbackBytes
+                    val tagsBytesForSum = if (tagsSize > 0L) tagsSize else tagsFallbackBytes
+                    val grandTotalBytes = onnxBytesForSum + tagsBytesForSum
+                    fun makeFileProgress(startPct: Int, endPct: Int, bytesBefore: Long, fileTotalBytes: Long): (DownloadProgress) -> Unit {
+                        val span = (endPct - startPct).coerceAtLeast(0)
+                        return { progress ->
+                            val raw = if (span <= 0) endPct else startPct + progress.percent * span / 100
+                            val pct = max(monotonicCursor[0], raw.coerceIn(0, 100))
+                            monotonicCursor[0] = pct
+                            // 累积字节 = 本文件之前的总量 + 本文件已下载量，配合 grandTotalBytes
+                            // 使 "已下载/总计" 与 percent 表达同一件事
+                            val cumulativeReceived = (bytesBefore + progress.receivedBytes.coerceIn(0L, fileTotalBytes))
+                                .coerceIn(0L, grandTotalBytes)
+                            onProgress(
+                                progress.copy(
+                                    percent = pct,
+                                    receivedBytes = cumulativeReceived,
+                                    totalBytes = grandTotalBytes
+                                )
+                            )
                         }
-                        onProgress(progress.copy(percent = adjustedPercent))
                     }
-                    downloadUrlToFile(context, "$baseUrl/$onnxFileName$downloadParams", modelTemp, model.id, onnxFileName, cumulativeProgress, isCancelled)
+                    downloadUrlToFile(context, onnxUrl, modelTemp, model.id, onnxFileName, makeFileProgress(0, onnxEnd, 0L, onnxBytesForSum), isCancelled, preProbe = onnxProbe)
                     if (isCancelled()) throw java.io.IOException("cancelled")
-                    downloadUrlToFile(context, "$baseUrl/$tagFileName$downloadParams", tagsTemp!!, model.id, tagFileName, cumulativeProgress, isCancelled)
+                    downloadUrlToFile(context, tagsUrl, tagsTemp!!, model.id, tagFileName, makeFileProgress(onnxEnd, 100, onnxBytesForSum, tagsBytesForSum), isCancelled, preProbe = tagsProbe)
                     if (isCancelled()) throw java.io.IOException("cancelled")
                 } else {
                     // ---- external data 模型：按「真实字节占比」动态分配进度 ----
@@ -11008,7 +11087,15 @@ fun downloadAiModelBundle(
                     // 某次算出的百分比小于上一次，进度条会"倒退"，观感很差。
                     // 这里维护一个全局游标，只允许百分比单调不减。
                     val monotonicCursor = intArrayOf(0)
-                    fun makeProgress(range: Pair<Int, Int>): (DownloadProgress) -> Unit {
+                    // 各文件的"用于汇总"体积：探测成功用真实值，失败用 fallback；
+                    // 与 weights 保持同一套兜底逻辑，使累积字节与百分比同源。
+                    val bytesForSum = buildList {
+                        add(if (onnxSize > 0L) onnxSize else onnxFallbackBytes)
+                        shardSizes.forEach { add(if (it > 0L) it else shardFallbackBytes) }
+                        add(if (tagsSize > 0L) tagsSize else tagsFallbackBytes)
+                    }
+                    val grandTotalBytes = bytesForSum.sum()
+                    fun makeProgress(range: Pair<Int, Int>, bytesBefore: Long, fileTotalBytes: Long): (DownloadProgress) -> Unit {
                         val startPct = range.first
                         val endPct = range.second
                         val span = endPct - startPct
@@ -11016,29 +11103,44 @@ fun downloadAiModelBundle(
                             val raw = if (span <= 0) endPct else startPct + progress.percent * span / 100
                             val pct = max(monotonicCursor[0], raw.coerceIn(0, 100))
                             monotonicCursor[0] = pct
-                            onProgress(progress.copy(percent = pct))
+                            // 累积字节 = 本文件之前的总量 + 本文件已下载量，
+                            // 让「已下载/总计」文本与 percent 表达同一件事
+                            val cumulativeReceived = (bytesBefore + progress.receivedBytes.coerceIn(0L, fileTotalBytes))
+                                .coerceIn(0L, grandTotalBytes)
+                            onProgress(
+                                progress.copy(
+                                    percent = pct,
+                                    receivedBytes = cumulativeReceived,
+                                    totalBytes = grandTotalBytes
+                                )
+                            )
                         }
                     }
 
-                    downloadUrlToFile(context, onnxUrl, modelTemp, model.id, onnxFileName, makeProgress(onnxBounds), isCancelled, preProbe = onnxProbe)
+                    var bytesCursor = 0L
+                    val onnxBytes = bytesForSum[0]
+                    downloadUrlToFile(context, onnxUrl, modelTemp, model.id, onnxFileName, makeProgress(onnxBounds, bytesCursor, onnxBytes), isCancelled, preProbe = onnxProbe)
+                    bytesCursor += onnxBytes
                     if (isCancelled()) throw java.io.IOException("cancelled")
 
                     extraTempFiles.forEachIndexed { index, tempFile ->
                         val sourceName = extraSourceNames[index]
+                        val shardBytes = bytesForSum[1 + index]
                         downloadUrlToFile(
                             context,
                             shardUrls[index],
                             tempFile,
                             model.id,
                             "$sourceName（分片 ${index + 1}/$extraCount）",
-                            makeProgress(shardBounds[index]),
+                            makeProgress(shardBounds[index], bytesCursor, shardBytes),
                             isCancelled,
                             preProbe = shardProbes[index]
                         )
+                        bytesCursor += shardBytes
                         if (isCancelled()) throw java.io.IOException("cancelled")
                     }
 
-                    downloadUrlToFile(context, tagsUrl, tagsTemp!!, model.id, tagFileName, makeProgress(tagsBounds), isCancelled, preProbe = tagsProbe)
+                    downloadUrlToFile(context, tagsUrl, tagsTemp!!, model.id, tagFileName, makeProgress(tagsBounds, bytesCursor, bytesForSum.last()), isCancelled, preProbe = tagsProbe)
                     if (isCancelled()) throw java.io.IOException("cancelled")
                 }
 

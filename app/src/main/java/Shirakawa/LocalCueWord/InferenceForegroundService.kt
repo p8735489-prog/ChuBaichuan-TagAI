@@ -10,6 +10,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 
@@ -21,6 +23,7 @@ import androidx.core.app.NotificationCompat
 class InferenceForegroundService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val stopReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -48,6 +51,7 @@ class InferenceForegroundService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         runCatching { unregisterReceiver(stopReceiver) }
+        mainHandler.removeCallbacksAndMessages(null)
         releaseWakeLock()
     }
 
@@ -64,9 +68,24 @@ class InferenceForegroundService : Service() {
                 val stage = intent.getStringExtra(EXTRA_STAGE) ?: ""
                 updateNotification(percent, stage)
             }
+            ACTION_COMPLETE -> {
+                val percent = intent.getIntExtra(EXTRA_PERCENT, 100).coerceIn(0, 100)
+                val stage = intent.getStringExtra(EXTRA_STAGE) ?: getString(R.string.workflow_progress_done)
+                updateNotification(percent, stage)
+                releaseWakeLock()
+                // 给系统通知一个极短的时间展示 100%，随后自动消失。
+                mainHandler.removeCallbacksAndMessages(null)
+                mainHandler.postDelayed({
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
+                    stopSelf()
+                }, 320L)
+            }
             ACTION_STOP -> {
+                mainHandler.removeCallbacksAndMessages(null)
                 releaseWakeLock()
                 stopForeground(STOP_FOREGROUND_REMOVE)
+                getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
                 stopSelf()
             }
         }
@@ -155,6 +174,7 @@ class InferenceForegroundService : Service() {
         const val ACTION_START = "inference_start"
         const val ACTION_UPDATE = "inference_update"
         const val ACTION_STOP = "inference_stop"
+        const val ACTION_COMPLETE = "inference_complete"
         const val ACTION_STOP_BROADCAST = "Shirakawa.LocalCueWord.INFERENCE_STOP"
 
         const val EXTRA_PERCENT = "percent"
@@ -174,6 +194,18 @@ class InferenceForegroundService : Service() {
             val intent = Intent(context, InferenceForegroundService::class.java)
                 .setAction(ACTION_UPDATE)
                 .putExtra(EXTRA_PERCENT, percent)
+                .putExtra(EXTRA_STAGE, stage)
+            context.startService(intent)
+        }
+
+        /**
+         * 真正完成后先同步显示 100%，随后自动移除通知。
+         * App 内与通知栏使用同一个最终百分比 100。
+         */
+        fun complete(context: Context, stage: String) {
+            val intent = Intent(context, InferenceForegroundService::class.java)
+                .setAction(ACTION_COMPLETE)
+                .putExtra(EXTRA_PERCENT, 100)
                 .putExtra(EXTRA_STAGE, stage)
             context.startService(intent)
         }

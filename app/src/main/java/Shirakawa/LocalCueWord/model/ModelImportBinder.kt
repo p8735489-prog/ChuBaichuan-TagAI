@@ -11,7 +11,7 @@ object ModelImportBinder {
                 path = path,
                 type = "ONNX",
                 adapter = AdapterResolver.resolve(name),
-                loaded = true
+                loaded = false
             )
         )
     }

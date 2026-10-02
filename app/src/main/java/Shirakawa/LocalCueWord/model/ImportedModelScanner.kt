@@ -26,7 +26,7 @@ object ImportedModelScanner {
 
     private fun isModel(file: File): Boolean {
         val n = file.name.lowercase()
-        return n.endsWith(".onnx") || n.endsWith(".tflite") || n.endsWith(".pt") || n.endsWith(".bin") || n.endsWith(".safetensors")
+        return n.endsWith(".onnx")
     }
 
     private fun detectType(name: String): String {

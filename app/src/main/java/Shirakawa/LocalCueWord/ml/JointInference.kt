@@ -73,15 +73,27 @@ class JointInference(
         onProgress: (Float, String) -> Unit = { _, _ -> }
     ): JointResult {
         if (!precisionMode || !det.isReady) {
-            onProgress(0.5f, s(R.string.workflow_progress_tagger))
-            val tags = tagger.tag(bitmap, threshold, generalWeight, characterWeight)
+            // 普通模式：整段进度映射到 0.02..0.90。
+            // 以前这里只上报一次 0.5f，随后 tagger.tag() 是一段很长的同步推理，
+            // 期间没有任何进度更新——上层进度条只能停在兜底值（8%）不动，
+            // 等推理结束才直接跳到 100%，看起来就像"卡住然后突然满"。
+            // 现在把 tagger 内部的真实进度透传出来，映射到 [0.02, 0.90] 区间。
+            val stageStart = 0.02f
+            val stageEnd = 0.90f
+            onProgress(stageStart, s(R.string.workflow_progress_tagger))
+            val tags = tagger.tag(bitmap, threshold, generalWeight, characterWeight) { inner ->
+                val mapped = stageStart + (stageEnd - stageStart) * inner.coerceIn(0f, 1f)
+                onProgress(mapped, s(R.string.workflow_progress_tagger))
+            }
             // 普通模式：应用 TagFilter + 智能 Tag 选择
+            onProgress(0.93f, s(R.string.workflow_progress_filtering))
             val filtered = tagFilter.process(tags)
             val limited = tagSelector.select(
                 filtered,
                 limit = 30,
                 config = TagSelector.SelectionConfig()
             )
+            onProgress(0.98f, s(R.string.workflow_progress_output))
             return JointResult(
                 limited, objectsDetected = false, detectionCount = 0,
                 detectedClasses = emptyList(), cropBitmap = null,
@@ -93,14 +105,22 @@ class JointInference(
         onProgress(0.05f, s(R.string.workflow_progress_detect))
         val detections = det.detectObjects(bitmap)
         if (detections.isEmpty()) {
-            onProgress(0.5f, s(R.string.workflow_progress_no_target))
-            val tags = tagger.tag(bitmap, threshold, generalWeight, characterWeight)
+            // 未检测到目标，退化为整图打标：同样透传真实进度（映射到 0.10..0.90）
+            val stageStart = 0.10f
+            val stageEnd = 0.90f
+            onProgress(stageStart, s(R.string.workflow_progress_no_target))
+            val tags = tagger.tag(bitmap, threshold, generalWeight, characterWeight) { inner ->
+                val mapped = stageStart + (stageEnd - stageStart) * inner.coerceIn(0f, 1f)
+                onProgress(mapped, s(R.string.workflow_progress_no_target))
+            }
+            onProgress(0.93f, s(R.string.workflow_progress_filtering))
             val filtered = tagFilter.process(tags)
             val limited = tagSelector.select(
                 filtered,
                 limit = 30,
                 config = TagSelector.SelectionConfig()
             )
+            onProgress(0.98f, s(R.string.workflow_progress_output))
             return JointResult(
                 limited, objectsDetected = false, detectionCount = 0,
                 detectedClasses = emptyList(), cropBitmap = null,
@@ -177,9 +197,15 @@ class JointInference(
         val characterInstances = mutableListOf<CharacterInstance>()
         val totalTagsBeforeFilter = mutableListOf<Int>()
         crops.forEachIndexed { index, crop ->
-            val pct = 0.35f + (0.35f * (index + 1) / crops.size)
-            onProgress(pct, s(R.string.workflow_progress_tag_subject, index + 1, crops.size, crop.className))
-            val tags = tagger.tag(crop.bitmap, maxOf(threshold * 0.90f, 0.32f), generalWeight, characterWeight)
+            // 每个角色实例的打标映射到 [实例起点, 实例终点] 的子区间，
+            // 并把 tagger 内部真实进度透传进来，避免逐个实例推理期间进度不动。
+            val segStart = 0.35f + (0.35f * index / crops.size)
+            val segEnd = 0.35f + (0.35f * (index + 1) / crops.size)
+            onProgress(segStart, s(R.string.workflow_progress_tag_subject, index + 1, crops.size, crop.className))
+            val tags = tagger.tag(crop.bitmap, maxOf(threshold * 0.90f, 0.32f), generalWeight, characterWeight) { inner ->
+                val mapped = segStart + (segEnd - segStart) * inner.coerceIn(0f, 1f)
+                onProgress(mapped, s(R.string.workflow_progress_tag_subject, index + 1, crops.size, crop.className))
+            }
                 .filterPromptNoiseTags()
             totalTagsBeforeFilter.add(tags.size)
 
@@ -210,8 +236,10 @@ class JointInference(
 
         // Stage 6: background/overall tags (original image)
         onProgress(0.85f, s(R.string.workflow_progress_tag_background))
-        val backgroundTags = tagger.tag(bitmap, threshold, generalWeight, characterWeight)
-            .filterPromptNoiseTags()
+        val backgroundTags = tagger.tag(bitmap, threshold, generalWeight, characterWeight) { inner ->
+            val mapped = 0.85f + 0.07f * inner.coerceIn(0f, 1f)
+            onProgress(mapped, s(R.string.workflow_progress_tag_background))
+        }.filterPromptNoiseTags()
 
         // Stage 7: 融合 — 主体标签加权 + 背景标签降权 + 冲突过滤
         onProgress(0.92f, s(R.string.workflow_progress_fuse))
@@ -284,12 +312,14 @@ class JointInference(
             }
 
         onProgress(0.45f, s(R.string.workflow_progress_tag_background))
-        val subjectTags = tagger.tag(crop, threshold * 0.85f, generalWeight, characterWeight)
-            .filterPromptNoiseTags()
+        val subjectTags = tagger.tag(crop, threshold * 0.85f, generalWeight, characterWeight) { inner ->
+            onProgress(0.45f + 0.18f * inner.coerceIn(0f, 1f), s(R.string.workflow_progress_tag_background))
+        }.filterPromptNoiseTags()
 
-        onProgress(0.85f, s(R.string.workflow_progress_tag_background))
-        val backgroundTags = tagger.tag(bitmap, threshold, generalWeight, characterWeight)
-            .filterPromptNoiseTags()
+        onProgress(0.63f, s(R.string.workflow_progress_tag_background))
+        val backgroundTags = tagger.tag(bitmap, threshold, generalWeight, characterWeight) { inner ->
+            onProgress(0.63f + 0.20f * inner.coerceIn(0f, 1f), s(R.string.workflow_progress_tag_background))
+        }.filterPromptNoiseTags()
 
         onProgress(0.92f, s(R.string.workflow_progress_merge))
         val merged = tagFilter.fuseAndFilter(

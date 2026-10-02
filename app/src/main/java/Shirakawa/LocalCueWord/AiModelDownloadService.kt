@@ -9,6 +9,8 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -25,6 +27,7 @@ class AiModelDownloadService : Service() {
 
     // WakeLock：下载期间保持 CPU 唤醒，防止息屏后系统休眠中断下载
     private var wakeLock: PowerManager.WakeLock? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -228,9 +231,13 @@ class AiModelDownloadService : Service() {
             success = result.success
         )
         releaseWakeLock()
-        stopForeground(STOP_FOREGROUND_DETACH)
-        getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
-        stopSelf()
+        // 先让用户看到与 App 内一致的最终状态，再自动移除通知。
+        mainHandler.removeCallbacksAndMessages(null)
+        mainHandler.postDelayed({
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
+            stopSelf()
+        }, 350L)
     }
 
     /**
@@ -292,7 +299,10 @@ class AiModelDownloadService : Service() {
             buildString {
                 append(modelName)
                 append(" · ")
-                append(progress.percent)
+                // 通知栏与 App 内必须显示同一个百分比。
+                // 下载完成/校验阶段统一按 100% 显示（与 App 内校验弹窗的「100%」一致），
+                // 其余阶段直接取 progress.percent（即「已下载字节/总字节」的真实换算值）。
+                append(notificationPercent(progress, finished, success))
                 append("% · ")
                 append(progress.phase)
                 // 并行下载时把实际线程数一并显示（如「16 线程」），
@@ -314,7 +324,16 @@ class AiModelDownloadService : Service() {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
         )
-        .setProgress(100, progress.percent.coerceIn(0, 100), progress.totalBytes <= 0L && progress.percent == 0)
+        // 进度条数值与 App 内完全一致：
+        //   - 已完成（finished）或校验中（isVerifying）固定 100%；
+        //   - 其余阶段用真实 percent。
+        // 只有在「还没有任何真实进度」（总字节未知且 percent 仍为 0）时才显示不确定态，
+        // 避免通知栏出现与 App 内不同的"转圈/无进度"观感。
+        .setProgress(
+            100,
+            notificationPercent(progress, finished, success),
+            false
+        )
         .addAction(
             android.R.drawable.ic_menu_close_clear_cancel,
             getString(R.string.ai_model_download_abandon),
@@ -326,6 +345,22 @@ class AiModelDownloadService : Service() {
             )
         )
         .build()
+
+    /**
+     * 计算通知栏要显示的百分比，保证与 App 内进度完全一致：
+     * - 已完成：成功固定 100%，失败保留当前值；
+     * - 校验中（模型文件已下完，正在校验）：固定 100%（App 内校验弹窗也是 100%）；
+     * - 其他：直接使用 [DownloadProgress.percent]（真实「已下载字节/总字节」换算值）。
+     */
+    private fun notificationPercent(
+        progress: DownloadProgress,
+        finished: Boolean,
+        success: Boolean
+    ): Int = when {
+        finished -> if (success) 100 else progress.percent.coerceIn(0, 100)
+        progress.isVerifying -> 100
+        else -> progress.percent.coerceIn(0, 100)
+    }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -427,6 +462,7 @@ class AiModelDownloadService : Service() {
 
     override fun onDestroy() {
         DownloadConnectionTracker.disconnectAll()
+        mainHandler.removeCallbacksAndMessages(null)
         releaseWakeLock()
         serviceScope.cancel()
         super.onDestroy()
